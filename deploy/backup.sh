@@ -1,6 +1,7 @@
 #!/bin/sh
 # 每天備份 SQLite（systemd account-backup.timer 03:30）：用 SQLite 的 backup API 拿一致的快照，保留 30 天
 set -eu
+export TZ=Asia/Taipei   # VM 是 UTC；檔名用台灣日期
 HOME_DIR=${ACCOUNT_HOME:-/opt/account}
 DEST=$HOME_DIR/backups
 mkdir -p "$DEST"
