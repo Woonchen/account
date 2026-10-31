@@ -141,6 +141,7 @@ Name = Field(min_length=1, max_length=20)
 class LedgerIn(BaseModel):
     name: str = Field(min_length=1, max_length=30)
     parties: list[str] = Field(default_factory=lambda: list(db.DEFAULT_PARTIES), min_length=1, max_length=20)
+    copy_categories_from: int | None = None  # 每月開新帳本時沿用上一本的分類
 
     @field_validator("parties")
     @classmethod
@@ -179,7 +180,10 @@ def list_ledgers(user=Depends(current_user), conn=Depends(get_conn)):
 
 @app.post("/api/ledgers", status_code=201)
 def create_ledger(body: LedgerIn, user=Depends(current_user), conn=Depends(get_conn)):
-    lid = db.create_ledger(conn, body.name.strip(), body.parties, user["id"])
+    if body.copy_categories_from is not None and not conn.execute(
+            "SELECT 1 FROM ledgers WHERE id = ?", (body.copy_categories_from,)).fetchone():
+        raise HTTPException(404, "找不到要沿用的帳本")
+    lid = db.create_ledger(conn, body.name.strip(), body.parties, user["id"], body.copy_categories_from)
     conn.commit()
     log(f"新增帳本 #{lid} {body.name.strip()}（{user['username']}）")
     return ledger_detail(lid, user, conn)
@@ -371,10 +375,13 @@ def get_tx(conn, lid, tid):
 @app.get("/api/ledgers/{lid}/transactions")
 def list_transactions(month: str | None = None, party_id: int | None = None,
                       lid: int = Depends(get_ledger), user=Depends(current_user), conn=Depends(get_conn)):
-    month = month or dt.date.today().strftime("%Y-%m")
-    if not MONTH.fullmatch(month):
-        raise HTTPException(422, "月份格式要是 YYYY-MM")
-    sql, params = TX_SELECT + " WHERE t.ledger_id = ? AND substr(t.date, 1, 7) = ?", [lid, month]
+    """不給 month 就是整本帳本的記錄（一個月一本帳本時的用法）。"""
+    sql, params = TX_SELECT + " WHERE t.ledger_id = ?", [lid]
+    if month is not None:
+        if not MONTH.fullmatch(month):
+            raise HTTPException(422, "月份格式要是 YYYY-MM")
+        sql += " AND substr(t.date, 1, 7) = ?"
+        params.append(month)
     if party_id is not None:
         sql += " AND t.party_id = ?"
         params.append(party_id)
@@ -419,16 +426,10 @@ def delete_transaction(tid: int, lid: int = Depends(get_ledger), user=Depends(cu
 
 
 # ---------- 儀表板 ----------
-def add_months(month, n):
-    y, m = map(int, month.split("-"))
-    y, m = divmod(y * 12 + m - 1 + n, 12)
-    return f"{y:04d}-{m + 1:02d}"
-
-
 @app.get("/api/ledgers/{lid}/dashboard")
 def dashboard(start: str | None = None, end: str | None = None,
               lid: int = Depends(get_ledger), user=Depends(current_user), conn=Depends(get_conn)):
-    """start／end（含）不給就是全部期間。總計、各成員、各分類都依期間；每月收支固定是最近 12 個月。"""
+    """整本帳本的總計、各成員、各分類；start／end（含）可以只看其中一段。"""
     try:
         start = start and valid_date(start)
         end = end and valid_date(end)
@@ -468,26 +469,11 @@ def dashboard(start: str | None = None, end: str | None = None,
         FROM transactions t JOIN categories c ON c.id = t.category_id
         WHERE {where} GROUP BY c.id ORDER BY amount DESC""", params).fetchall()
 
-    this_month = dt.date.today().strftime("%Y-%m")
-    first = add_months(this_month, -11)
-    rows = {r["m"]: r for r in conn.execute("""
-        SELECT substr(date, 1, 7) AS m,
-               COALESCE(SUM(CASE WHEN kind = 'income' THEN amount END), 0) AS income,
-               COALESCE(SUM(CASE WHEN kind = 'expense' THEN amount END), 0) AS expense
-        FROM transactions WHERE ledger_id = ? AND date >= ? AND date < ? GROUP BY m""",
-        (lid, f"{first}-01", f"{add_months(this_month, 1)}-01"))}
-    monthly = []
-    for i in range(12):
-        m = add_months(first, i)
-        r = rows.get(m)
-        monthly.append({"month": m, "income": r["income"] if r else 0, "expense": r["expense"] if r else 0})
-
     return {
         "totals": {"income": tot["income"], "expense": tot["expense"], "balance": tot["income"] - tot["expense"],
                    "count": tot["count"], "first_date": tot["first"], "last_date": tot["last"]},
         "by_party": parties,
         "by_category": [dict(r) for r in by_cat],
-        "monthly": monthly,
     }
 
 

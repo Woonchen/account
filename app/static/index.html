@@ -72,11 +72,6 @@
     <section id="view-dashboard" class="view" hidden>
       <header class="view-head">
         <h2>儀表板</h2>
-        <div class="seg seg-sm" id="period">
-          <button type="button" data-period="all" class="active">全部</button>
-          <button type="button" data-period="year">今年</button>
-          <button type="button" data-period="month">本月</button>
-        </div>
       </header>
       <p class="muted small period-note" id="period-note"></p>
 
@@ -88,24 +83,11 @@
       </div>
 
       <div id="dash-empty" class="card empty-card" hidden>
-        <p>這段期間還沒有記錄</p>
+        <p>這本帳本還沒有記錄</p>
         <a class="button primary" href="#records">去記帳</a>
       </div>
 
       <div id="dash-body" class="dash-grid">
-        <section class="card chart-card span-2">
-          <header class="card-head">
-            <h3>每月收支 <span class="muted small">近 12 個月</span></h3>
-            <div class="legend"><span><i class="key key-income"></i>收入</span><span><i class="key key-expense"></i>支出</span></div>
-          </header>
-          <div class="chart" id="chart"></div>
-          <div class="tooltip" id="tooltip" hidden></div>
-          <details class="table-view">
-            <summary>看表格</summary>
-            <table class="num-table" id="monthly-table"></table>
-          </details>
-        </section>
-
         <section class="card">
           <header class="card-head"><h3>誰付款／收款</h3></header>
           <table class="num-table party-table" id="party-table"></table>
@@ -127,11 +109,7 @@
     <!-- 記帳 -->
     <section id="view-records" class="view" hidden>
       <header class="view-head">
-        <div class="month-nav">
-          <button class="icon-btn" id="prev-month" aria-label="上個月">‹</button>
-          <h2 id="month-label"></h2>
-          <button class="icon-btn" id="next-month" aria-label="下個月">›</button>
-        </div>
+        <h2>記帳</h2>
         <button class="primary add-inline" id="add-inline">＋ 記一筆</button>
       </header>
 
@@ -200,7 +178,8 @@
       <ul class="edit-list" id="ledger-parties"></ul>
       <button type="button" class="link" id="ledger-add-party">＋ 加一位</button>
     </div>
-    <p class="muted small">分類會先放常用的預設值，之後可以在「帳本設定」改。</p>
+    <label class="check" id="copy-cats-row"><input type="checkbox" id="copy-cats" checked> <span id="copy-cats-label">沿用目前帳本的分類</span></label>
+    <p class="muted small" id="cats-hint">分類會先放常用的預設值，之後可以在「帳本設定」改。</p>
     <p class="error" id="ledger-error"></p>
     <div class="actions">
       <span class="spacer"></span>

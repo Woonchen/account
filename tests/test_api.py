@@ -128,6 +128,21 @@ def test_ledger_custom_parties_validated(client):
     assert post(client, "/api/ledgers", {"name": ""}).status_code == 422
 
 
+def test_new_ledger_copies_categories(client):
+    login(client)
+    oct_ = new_ledger(client, "10 月")
+    url = f"/api/ledgers/{oct_['id']}/categories"
+    post(client, url, {"name": "尿布", "kind": "expense", "icon": "🧷"})
+    food = next(c for c in oct_["categories"] if c["name"] == "餐飲")
+    patch(client, f"{url}/{food['id']}", {"archived": True})
+    nov = new_ledger(client, "11 月", parties=["成", "圓"], copy_categories_from=oct_["id"])
+    names = [c["name"] for c in nov["categories"] if c["kind"] == "expense"]
+    assert "尿布" in names and "餐飲" not in names  # 封存的不沿用
+    assert [p["name"] for p in nov["parties"]] == ["成", "圓"]
+    assert all(c["id"] not in {x["id"] for x in oct_["categories"]} for c in nov["categories"])  # 是複製，不是共用
+    assert post(client, "/api/ledgers", {"name": "x", "copy_categories_from": 999}).status_code == 404
+
+
 def test_ledger_rename_archive_delete(client):
     login(client)
     led = new_ledger(client)
@@ -179,11 +194,15 @@ def test_transaction_crud_and_summary(client):
     t = r.json()
     assert (t["created_by"], t["category_name"], t["party_name"]) == ("Nick", "餐飲", "成")
     add(client, led, "薪資", "圓", "income", amount=50000, note="")
-    add(client, led, date="2026-10-31")  # 別的月份不算
+    add(client, led, date="2026-10-31")  # 給月份時別的月份不算
 
     data = client.get(f"{base}?month=2026-11").json()
     assert len(data["items"]) == 2
     assert data["summary"] == {"income": 50000, "expense": 120, "balance": 49880}
+    # 不給月份就是整本帳本（一個月一本帳本的用法）
+    data = client.get(base).json()
+    assert len(data["items"]) == 3 and data["summary"]["expense"] == 240
+    assert [i["date"] for i in data["items"]] == ["2026-11-01", "2026-11-01", "2026-10-31"]
     yuan = led["parties"][1]["id"]
     assert [i["party_name"] for i in client.get(f"{base}?month=2026-11&party_id={yuan}").json()["items"]] == ["圓"]
 
@@ -264,7 +283,7 @@ def test_dashboard(client):
     assert (parties["成"]["income"], parties["成"]["expense"]) == (5000, 350)
     assert parties["圓"]["expense"] == 100 and parties["寶貝基金"]["expense"] == 0
     assert [c["name"] for c in d["by_category"] if c["kind"] == "expense"] == ["餐飲", "交通"]
-    assert len(d["monthly"]) == 12 and d["monthly"][-1] == {"month": month, "income": 5000, "expense": 400}
+    assert "monthly" not in d
 
     d = client.get(f"{url}?start={month}-01").json()
     assert d["totals"]["expense"] == 400

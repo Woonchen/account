@@ -130,10 +130,16 @@ def migrate_v0(conn):
         conn.execute("PRAGMA foreign_keys = ON")
 
 
-def create_ledger(conn, name, parties, user_id):
+def create_ledger(conn, name, parties, user_id, copy_categories_from=None):
+    """新帳本：成員照給的名單；分類沿用指定帳本（不含封存的），沒指定就用預設分類。"""
     lid = conn.execute("INSERT INTO ledgers (name, created_by) VALUES (?, ?)", (name, user_id)).lastrowid
     conn.executemany("INSERT INTO parties (ledger_id, name, sort_order) VALUES (?, ?, ?)",
                      [(lid, n, i) for i, n in enumerate(parties)])
-    conn.executemany("INSERT INTO categories (ledger_id, kind, name, icon, sort_order) VALUES (?, ?, ?, ?, ?)",
-                     [(lid, k, n, ic, i) for i, (k, n, ic) in enumerate(DEFAULT_CATEGORIES)])
+    if copy_categories_from is not None:
+        conn.execute("""INSERT INTO categories (ledger_id, kind, name, icon, sort_order)
+                        SELECT ?, kind, name, icon, sort_order FROM categories
+                        WHERE ledger_id = ? AND archived = 0 ORDER BY sort_order, id""", (lid, copy_categories_from))
+    else:
+        conn.executemany("INSERT INTO categories (ledger_id, kind, name, icon, sort_order) VALUES (?, ?, ?, ?, ?)",
+                         [(lid, k, n, ic, i) for i, (k, n, ic) in enumerate(DEFAULT_CATEGORIES)])
     return lid

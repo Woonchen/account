@@ -12,9 +12,7 @@ const state = {
   ledgers: [],
   ledger: null,          // 目前帳本（含 parties、categories）
   view: "dashboard",
-  month: thisMonth(),
   partyFilter: null,
-  period: "all",
   catKind: "expense",    // 儀表板分類卡
   dash: null,
   tx: { kind: "expense", party: null, cat: null, editing: null },
@@ -32,11 +30,6 @@ function el(tag, props = {}, ...children) {
 }
 function money(n) { return (n < 0 ? "−" : "") + fmt.format(Math.abs(n)); }
 function signed(kind, n) { return (kind === "income" ? "+" : "−") + fmt.format(n); }
-function short(n) {  // 圖表座標軸：1.2萬、350
-  if (n >= 1e8) return `${+(n / 1e8).toFixed(1)}億`;
-  if (n >= 1e4) return `${+(n / 1e4).toFixed(1)}萬`;
-  return fmt.format(n);
-}
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch { /* 無痕模式之類，不記也沒關係 */ } },
@@ -179,25 +172,11 @@ function showView() {
   for (const a of document.querySelectorAll(".tabs a")) a.classList.toggle("active", a.dataset.view === state.view);
   if (!has) return;
   if (state.view === "dashboard") loadDashboard();
-  else loadMonth();
+  else loadRecords();
 }
 window.addEventListener("hashchange", showView);
 
 // ---------- 儀表板 ----------
-function periodRange() {
-  const d = new Date();
-  if (state.period === "month") return { start: `${thisMonth()}-01`, end: today(), label: `${d.getFullYear()} 年 ${d.getMonth() + 1} 月` };
-  if (state.period === "year") return { start: `${d.getFullYear()}-01-01`, end: today(), label: `${d.getFullYear()} 年` };
-  return { label: "全部期間" };
-}
-
-$("#period").addEventListener("click", (e) => {
-  const p = e.target.dataset.period;
-  if (!p) return;
-  state.period = p;
-  for (const b of $("#period").children) b.classList.toggle("active", b.dataset.period === p);
-  loadDashboard();
-});
 $("#cat-period-kind").addEventListener("click", (e) => {
   const k = e.target.dataset.kind;
   if (!k) return;
@@ -207,22 +186,17 @@ $("#cat-period-kind").addEventListener("click", (e) => {
 });
 
 async function loadDashboard() {
-  const r = periodRange();
-  const q = new URLSearchParams();
-  if (r.start) { q.set("start", r.start); q.set("end", r.end); }
-  const d = await api(L(`/dashboard?${q}`));
+  const d = await api(L("/dashboard"));
   state.dash = d;
   const t = d.totals;
   $("#t-income").textContent = fmt.format(t.income);
   $("#t-expense").textContent = fmt.format(t.expense);
   $("#t-balance").textContent = money(t.balance);
   $("#t-count").textContent = fmt.format(t.count);
-  $("#period-note").textContent = t.count && state.period === "all" ? `${r.label}：${t.first_date} 到 ${t.last_date}` : r.label;
-  const any = d.monthly.some((m) => m.income || m.expense) || t.count;
+  $("#period-note").textContent = t.count
+    ? (t.first_date === t.last_date ? t.first_date : `${t.first_date} 到 ${t.last_date}`) : "";
   $("#dash-empty").hidden = !!t.count;
-  $("#dash-body").hidden = !any;
-  renderChart();
-  renderMonthlyTable();
+  $("#dash-body").hidden = !t.count;
   renderPartyTable();
   renderCatBars();
 }
@@ -253,7 +227,7 @@ function renderCatBars() {
   ul.replaceChildren();
   const cats = state.dash.by_category.filter((c) => c.kind === state.catKind);
   const total = cats.reduce((a, c) => a + c.amount, 0);
-  if (!cats.length) { ul.append(el("li", { className: "muted small", textContent: `這段期間沒有${KIND[state.catKind]}` })); return; }
+  if (!cats.length) { ul.append(el("li", { className: "muted small", textContent: `這本帳本沒有${KIND[state.catKind]}` })); return; }
   const max = cats[0].amount;
   for (const c of cats) {
     const fill = el("div", { className: "bar-fill" });
@@ -267,113 +241,7 @@ function renderCatBars() {
   }
 }
 
-function renderMonthlyTable() {
-  const tbl = $("#monthly-table");
-  tbl.replaceChildren(el("thead", {}, el("tr", {}, ...["月份", "收入", "支出", "結餘"].map((h) => el("th", { textContent: h })))));
-  const body = el("tbody");
-  for (const m of [...state.dash.monthly].reverse()) {
-    body.append(el("tr", {},
-      el("td", { textContent: m.month }),
-      el("td", { textContent: fmt.format(m.income) }),
-      el("td", { textContent: fmt.format(m.expense) }),
-      el("td", { textContent: money(m.income - m.expense) })));
-  }
-  tbl.append(body);
-}
-
-// 每月收支：群組長條圖（收入／支出並排），單一 y 軸，滑過顯示數字
-const SVG = "http://www.w3.org/2000/svg";
-function svg(tag, attrs = {}) {
-  const e = document.createElementNS(SVG, tag);
-  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
-  return e;
-}
-function niceMax(v) {
-  if (v <= 0) return 1000;
-  const p = 10 ** Math.floor(Math.log10(v));
-  for (const m of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p;
-  return 10 * p;
-}
-function barPath(x, y, w, h, r) {  // 上方圓角、貼底的長條
-  if (h <= 0) return "";
-  r = Math.min(r, w / 2, h);
-  return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
-}
-
-function renderChart() {
-  const box = $("#chart");
-  const tip = $("#tooltip");
-  box.replaceChildren();
-  tip.hidden = true;
-  if (!state.dash || $("#dash-body").hidden) return;
-  const data = state.dash.monthly;
-  const W = box.clientWidth || 600, H = box.clientHeight || 220;
-  const m = { t: 8, r: 4, b: 24, l: 44 };
-  const iw = W - m.l - m.r, ih = H - m.t - m.b;
-  const max = niceMax(Math.max(...data.map((d) => Math.max(d.income, d.expense))));
-  const y = (v) => m.t + ih - (v / max) * ih;
-  const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "近 12 個月每月收入與支出長條圖" });
-
-  for (let i = 0; i <= 4; i++) {
-    const v = (max / 4) * i, yy = Math.round(y(v)) + 0.5;
-    root.append(svg("line", { x1: m.l, x2: W - m.r, y1: yy, y2: yy, class: "grid-line" }));
-    const t = svg("text", { x: m.l - 8, y: yy + 4, "text-anchor": "end", class: "axis-text" });
-    t.textContent = short(v);
-    root.append(t);
-  }
-  const band = iw / data.length;
-  const bw = Math.max(3, Math.min(18, (band - 8) / 2 - 1));
-  const narrow = band < 34;
-  data.forEach((d, i) => {
-    const cx = m.l + band * i + band / 2;
-    const g = svg("g");
-    g.append(svg("path", { d: barPath(cx - bw - 1, y(d.income), bw, m.t + ih - y(d.income), 4), class: "bar-income" }));
-    g.append(svg("path", { d: barPath(cx + 1, y(d.expense), bw, m.t + ih - y(d.expense), 4), class: "bar-expense" }));
-    const mo = Number(d.month.slice(5));
-    if (!narrow || i % 2 === (data.length - 1) % 2) {
-      const t = svg("text", { x: cx, y: H - 6, "text-anchor": "middle", class: "axis-text" });
-      t.textContent = mo === 1 ? `${d.month.slice(2, 4)}年1月` : `${mo}月`;
-      g.append(t);
-    }
-    const hit = svg("rect", { x: m.l + band * i, y: m.t, width: band, height: ih, class: "hit" });
-    const show = () => {
-      for (const h of root.querySelectorAll(".hit.on")) h.classList.remove("on");
-      hit.classList.add("on");
-      tip.replaceChildren(
-        el("b", { textContent: `${d.month.slice(0, 4)} 年 ${mo} 月` }),
-        el("div", {}, el("span", {}, el("i", { className: "key key-income" }), "收入"), el("span", { textContent: fmt.format(d.income) })),
-        el("div", {}, el("span", {}, el("i", { className: "key key-expense" }), "支出"), el("span", { textContent: fmt.format(d.expense) })),
-        el("div", {}, el("span", { textContent: "結餘" }), el("span", { textContent: money(d.income - d.expense) })));
-      tip.hidden = false;
-      const cardRect = box.parentElement.getBoundingClientRect(), boxRect = box.getBoundingClientRect();
-      const left = boxRect.left - cardRect.left + cx;
-      const tw = tip.offsetWidth;
-      tip.style.left = `${Math.max(8, Math.min(cardRect.width - tw - 8, left - tw / 2))}px`;
-      tip.style.top = `${boxRect.top - cardRect.top + Math.max(0, y(Math.max(d.income, d.expense)) - tip.offsetHeight - 10)}px`;
-    };
-    hit.addEventListener("pointerenter", show);
-    hit.addEventListener("click", show);
-    g.append(hit);
-    root.append(g);
-  });
-  root.addEventListener("pointerleave", (e) => {
-    if (e.pointerType === "mouse") { tip.hidden = true; for (const h of root.querySelectorAll(".hit.on")) h.classList.remove("on"); }
-  });
-  box.append(root);
-}
-let resizeTimer;
-window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => state.view === "dashboard" && renderChart(), 120); });
-
 // ---------- 記帳 ----------
-function shiftMonth(delta) {
-  const [y, m] = state.month.split("-").map(Number);
-  const d = new Date(y, m - 1 + delta, 1);
-  state.month = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
-  loadMonth();
-}
-$("#prev-month").addEventListener("click", () => shiftMonth(-1));
-$("#next-month").addEventListener("click", () => shiftMonth(1));
-
 function renderPartyFilter() {
   const box = $("#party-filter");
   box.replaceChildren();
@@ -381,16 +249,14 @@ function renderPartyFilter() {
   const chip = (id, name) => {
     const b = el("button", { type: "button", textContent: name, className: state.partyFilter === id ? "active" : "" });
     b.setAttribute("aria-pressed", String(state.partyFilter === id));
-    b.addEventListener("click", () => { state.partyFilter = id; renderPartyFilter(); loadMonth(); });
+    b.addEventListener("click", () => { state.partyFilter = id; renderPartyFilter(); loadRecords(); });
     return b;
   };
   box.append(chip(null, "全部"), ...parties.map((p) => chip(p.id, p.name)));
 }
 
-async function loadMonth() {
-  const [y, m] = state.month.split("-");
-  $("#month-label").textContent = `${y} 年 ${Number(m)} 月`;
-  const q = new URLSearchParams({ month: state.month });
+async function loadRecords() {
+  const q = new URLSearchParams();
   if (state.partyFilter) q.set("party_id", state.partyFilter);
   const data = await api(L(`/transactions?${q}`));
   const s = data.summary;
@@ -404,7 +270,7 @@ function renderList(items) {
   const list = $("#list");
   list.replaceChildren();
   $("#empty").hidden = items.length > 0;
-  $("#empty").textContent = state.partyFilter ? "這個月沒有這個人的記錄" : "這個月還沒有記錄，按「＋」記一筆";
+  $("#empty").textContent = state.partyFilter ? "這本帳本沒有這個人的記錄" : "這本帳本還沒有記錄，按「＋」記一筆";
   $("#records").hidden = !items.length;
   const byDay = new Map();
   for (const t of items) {
@@ -482,8 +348,7 @@ function openTx(t = null) {
   $("#tx-title").textContent = t ? "編輯記錄" : `記一筆 · ${state.ledger.name}`;
   $("#tx-error").textContent = "";
   txForm.amount.value = t ? t.amount : "";
-  // 新增時：看的是本月就預設今天，看別的月份就預設那個月 1 號
-  txForm.date.value = t ? t.date : (state.view !== "records" || state.month === thisMonth() ? today() : `${state.month}-01`);
+  txForm.date.value = t ? t.date : today();
   txForm.note.value = t ? t.note : "";
   $("#tx-delete").hidden = !t;
   $("#tx-meta").textContent = t ? `${t.created_by} 記的` + (t.updated_at !== t.created_at ? "（改過）" : "") : "";
@@ -507,12 +372,8 @@ txForm.addEventListener("submit", async (e) => {
     else await api(L("/transactions"), { method: "POST", body });
     store.set(`account.party.${state.ledger.id}`, String(state.tx.party));
     txDialog.close();
-    if (state.view === "records") {
-      state.month = body.date.slice(0, 7);
-      await loadMonth();
-    } else {
-      await loadDashboard();
-    }
+    if (state.view === "records") await loadRecords();
+    else await loadDashboard();
   } catch (err) {
     $("#tx-error").textContent = err.message;
   }
@@ -524,7 +385,7 @@ $("#tx-delete").addEventListener("click", async () => {
   try {
     await api(L(`/transactions/${t.id}`), { method: "DELETE" });
     txDialog.close();
-    await loadMonth();
+    await loadRecords();
   } catch (err) {
     $("#tx-error").textContent = err.message;
   }
@@ -541,12 +402,31 @@ function partyInputRow(value = "") {
   rm.addEventListener("click", () => li.remove());
   return li;
 }
+// 一個月一本帳本：名稱預設「YYYY 年 M 月」（這個月的已經有了就給下個月）；付款／收款人與分類沿用目前帳本
+function suggestLedgerName() {
+  const d = new Date();
+  for (let i = 0; i < 24; i++) {
+    const x = new Date(d.getFullYear(), d.getMonth() + i, 1);
+    const name = `${x.getFullYear()} 年 ${x.getMonth() + 1} 月`;
+    if (!state.ledgers.some((l) => l.name === name)) return name;
+  }
+  return "";
+}
 function openNewLedger() {
   closePopovers();
   const f = $("#ledger-form");
   f.reset();
   $("#ledger-error").textContent = "";
-  $("#ledger-parties").replaceChildren(...DEFAULT_PARTIES.map((n) => partyInputRow(n)));
+  f.name.value = suggestLedgerName();
+  const cur = state.ledger;
+  const names = cur ? cur.parties.filter((p) => !p.archived).map((p) => p.name) : [];
+  $("#ledger-parties").replaceChildren(...(names.length ? names : DEFAULT_PARTIES).map((n) => partyInputRow(n)));
+  $("#copy-cats-row").hidden = !cur;
+  $("#copy-cats").checked = !!cur;
+  if (cur) $("#copy-cats-label").textContent = `沿用「${cur.name}」的分類`;
+  const hint = () => { $("#cats-hint").hidden = $("#copy-cats").checked && !!cur; };
+  $("#copy-cats").onchange = hint;
+  hint();
   ledgerDialog.showModal();
 }
 $("#new-ledger").addEventListener("click", openNewLedger);
@@ -563,7 +443,9 @@ $("#ledger-form").addEventListener("submit", async (e) => {
   const parties = [...$("#ledger-parties").querySelectorAll("input")].map((i) => i.value.trim()).filter(Boolean);
   if (!parties.length) { $("#ledger-error").textContent = "至少要有一位付款／收款人"; return; }
   try {
-    const led = await api("/api/ledgers", { method: "POST", body: { name, parties } });
+    const body = { name, parties };
+    if (state.ledger && $("#copy-cats").checked) body.copy_categories_from = state.ledger.id;
+    const led = await api("/api/ledgers", { method: "POST", body });
     ledgerDialog.close();
     await loadLedgers();
     await switchLedger(led.id);
