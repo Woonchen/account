@@ -13,7 +13,7 @@
 <body>
 
 <!-- 登入 -->
-<section id="login" class="screen" hidden>
+<section id="login" class="login" hidden>
   <form id="login-form" class="card login-card">
     <h1>記帳本</h1>
     <label>帳號<input name="username" autocomplete="username" required autocapitalize="off"></label>
@@ -23,45 +23,162 @@
   </form>
 </section>
 
-<!-- 主畫面 -->
-<section id="main" class="screen" hidden>
-  <header class="topbar">
-    <button class="icon-btn" id="prev-month" aria-label="上個月">‹</button>
-    <h1 id="month-label"></h1>
-    <button class="icon-btn" id="next-month" aria-label="下個月">›</button>
-    <button class="icon-btn menu-btn" id="menu-btn" aria-label="選單">⋯</button>
-  </header>
-  <div class="menu" id="menu" hidden>
-    <p class="muted" id="me-label"></p>
-    <button id="open-categories">分類管理</button>
-    <button id="logout">登出</button>
-  </div>
+<!-- 主畫面：電腦是左側欄，手機是上方列＋底部分頁 -->
+<div id="shell" class="shell" hidden>
+  <aside class="side">
+    <div class="side-top">
+      <div class="ledger-switch">
+        <button id="ledger-btn" class="ledger-btn" aria-haspopup="true" aria-expanded="false">
+          <span class="ledger-icon" aria-hidden="true">📒</span>
+          <span id="ledger-name" class="ledger-name">帳本</span>
+          <span class="caret" aria-hidden="true">▾</span>
+        </button>
+        <div id="ledger-menu" class="popover ledger-menu" hidden>
+          <div id="ledger-list"></div>
+          <div class="popover-sep"></div>
+          <button id="new-ledger">＋ 新增帳本</button>
+          <button id="ledger-settings">⚙︎ 帳本設定</button>
+        </div>
+      </div>
+      <div class="user-switch">
+        <button id="user-btn" class="user-btn" aria-label="帳號"><span id="user-initial"></span></button>
+        <div id="user-menu" class="popover user-menu" hidden>
+          <p class="muted small" id="me-label"></p>
+          <button id="logout">登出</button>
+        </div>
+      </div>
+    </div>
+    <nav class="tabs" aria-label="主要頁面">
+      <a href="#dashboard" data-view="dashboard"><span aria-hidden="true">📊</span>儀表板</a>
+      <a href="#records" data-view="records"><span aria-hidden="true">📝</span>記帳</a>
+    </nav>
+    <div class="side-foot">
+      <span class="muted small" id="me-foot"></span>
+      <button id="logout-foot" class="link">登出</button>
+    </div>
+  </aside>
 
-  <div class="summary">
-    <div><span class="muted">收入</span><strong class="income" id="sum-income">0</strong></div>
-    <div><span class="muted">支出</span><strong class="expense" id="sum-expense">0</strong></div>
-    <div><span class="muted">結餘</span><strong id="sum-balance">0</strong></div>
-  </div>
+  <main class="content">
+    <!-- 還沒有帳本 -->
+    <section id="view-empty" class="view" hidden>
+      <div class="card onboard">
+        <h2>先建立一本帳本</h2>
+        <p class="muted">帳本可以分開記不同用途，例如「家用」、「旅行」、「寶貝」。每本帳本有自己的付款／收款人與分類。</p>
+        <button class="primary" id="onboard-create">建立帳本</button>
+      </div>
+    </section>
 
-  <main id="list"></main>
-  <p class="empty muted" id="empty" hidden>這個月還沒有記錄，按右下角＋新增</p>
+    <!-- 儀表板 -->
+    <section id="view-dashboard" class="view" hidden>
+      <header class="view-head">
+        <h2>儀表板</h2>
+        <div class="seg seg-sm" id="period">
+          <button type="button" data-period="all" class="active">全部</button>
+          <button type="button" data-period="year">今年</button>
+          <button type="button" data-period="month">本月</button>
+        </div>
+      </header>
+      <p class="muted small period-note" id="period-note"></p>
 
-  <button class="fab" id="add-btn" aria-label="新增一筆">＋</button>
-</section>
+      <div class="tiles">
+        <div class="tile"><span class="tile-label"><i class="key key-income"></i>總收入</span><strong id="t-income">0</strong></div>
+        <div class="tile"><span class="tile-label"><i class="key key-expense"></i>總支出</span><strong id="t-expense">0</strong></div>
+        <div class="tile"><span class="tile-label">結餘</span><strong id="t-balance">0</strong></div>
+        <div class="tile"><span class="tile-label">筆數</span><strong id="t-count">0</strong></div>
+      </div>
+
+      <div id="dash-empty" class="card empty-card" hidden>
+        <p>這段期間還沒有記錄</p>
+        <a class="button primary" href="#records">去記帳</a>
+      </div>
+
+      <div id="dash-body" class="dash-grid">
+        <section class="card chart-card span-2">
+          <header class="card-head">
+            <h3>每月收支 <span class="muted small">近 12 個月</span></h3>
+            <div class="legend"><span><i class="key key-income"></i>收入</span><span><i class="key key-expense"></i>支出</span></div>
+          </header>
+          <div class="chart" id="chart"></div>
+          <div class="tooltip" id="tooltip" hidden></div>
+          <details class="table-view">
+            <summary>看表格</summary>
+            <table class="num-table" id="monthly-table"></table>
+          </details>
+        </section>
+
+        <section class="card">
+          <header class="card-head"><h3>誰付款／收款</h3></header>
+          <table class="num-table party-table" id="party-table"></table>
+        </section>
+
+        <section class="card">
+          <header class="card-head">
+            <h3>分類</h3>
+            <div class="seg seg-sm" id="cat-period-kind">
+              <button type="button" data-kind="expense" class="active">支出</button>
+              <button type="button" data-kind="income">收入</button>
+            </div>
+          </header>
+          <ul class="bars" id="cat-bars"></ul>
+        </section>
+      </div>
+    </section>
+
+    <!-- 記帳 -->
+    <section id="view-records" class="view" hidden>
+      <header class="view-head">
+        <div class="month-nav">
+          <button class="icon-btn" id="prev-month" aria-label="上個月">‹</button>
+          <h2 id="month-label"></h2>
+          <button class="icon-btn" id="next-month" aria-label="下個月">›</button>
+        </div>
+        <button class="primary add-inline" id="add-inline">＋ 記一筆</button>
+      </header>
+
+      <div class="month-sum">
+        <div><span class="muted">收入</span><strong id="m-income">0</strong></div>
+        <div><span class="muted">支出</span><strong id="m-expense">0</strong></div>
+        <div><span class="muted">結餘</span><strong id="m-balance">0</strong></div>
+      </div>
+
+      <div class="chips" id="party-filter" role="group" aria-label="篩選付款／收款人"></div>
+
+      <div class="records" id="records">
+        <div class="rec-head" aria-hidden="true">
+          <span>分類</span><span>付款／收款</span><span>備註</span><span>記錄者</span><span class="r">金額</span>
+        </div>
+        <div id="list"></div>
+      </div>
+      <p class="empty muted" id="empty" hidden>這個月還沒有記錄</p>
+    </section>
+  </main>
+
+  <button class="fab" id="add-btn" aria-label="記一筆" hidden>＋</button>
+</div>
 
 <!-- 新增／編輯一筆 -->
 <dialog id="tx-dialog">
   <form id="tx-form" method="dialog">
+    <h3 id="tx-title">記一筆</h3>
     <div class="seg" id="tx-kind">
       <button type="button" data-kind="expense" class="active">支出</button>
       <button type="button" data-kind="income">收入</button>
     </div>
-    <label class="amount-label">金額
-      <input name="amount" inputmode="numeric" pattern="[0-9]*" required placeholder="0" autocomplete="off">
-    </label>
-    <div class="cat-grid" id="tx-cats"></div>
-    <label>日期<input name="date" type="date" required></label>
-    <label>備註<input name="note" maxlength="200" autocomplete="off"></label>
+    <div class="form-row">
+      <label class="amount-label">金額
+        <input name="amount" inputmode="numeric" required placeholder="0" autocomplete="off">
+      </label>
+      <label>日期<input name="date" type="date" required></label>
+    </div>
+    <div class="field">
+      <span class="field-label" id="party-label">誰付款</span>
+      <div class="chips" id="tx-parties"></div>
+    </div>
+    <div class="field">
+      <span class="field-label">分類</span>
+      <div class="cat-grid" id="tx-cats"></div>
+    </div>
+    <label>備註<input name="note" maxlength="200" autocomplete="off" placeholder="選填"></label>
     <p class="error" id="tx-error"></p>
     <p class="muted small" id="tx-meta"></p>
     <div class="actions">
@@ -73,21 +190,68 @@
   </form>
 </dialog>
 
-<!-- 分類管理 -->
-<dialog id="cat-dialog">
-  <div class="cat-manage">
-    <div class="seg" id="cat-kind">
-      <button type="button" data-kind="expense" class="active">支出</button>
-      <button type="button" data-kind="income">收入</button>
+<!-- 新增帳本 -->
+<dialog id="ledger-dialog">
+  <form id="ledger-form">
+    <h3>新增帳本</h3>
+    <label>帳本名稱<input name="name" maxlength="30" required placeholder="例如：家用" autocomplete="off"></label>
+    <div class="field">
+      <span class="field-label">誰會付款／收款</span>
+      <ul class="edit-list" id="ledger-parties"></ul>
+      <button type="button" class="link" id="ledger-add-party">＋ 加一位</button>
     </div>
-    <ul id="cat-list"></ul>
-    <form id="cat-form" class="cat-add">
-      <input name="icon" maxlength="8" placeholder="🙂" aria-label="圖示" class="icon-input">
-      <input name="name" maxlength="20" placeholder="新分類名稱" required aria-label="名稱">
-      <button class="primary" type="submit">新增</button>
-    </form>
-    <p class="error" id="cat-error"></p>
-    <div class="actions"><span class="spacer"></span><button type="button" id="cat-close">完成</button></div>
+    <p class="muted small">分類會先放常用的預設值，之後可以在「帳本設定」改。</p>
+    <p class="error" id="ledger-error"></p>
+    <div class="actions">
+      <span class="spacer"></span>
+      <button type="button" id="ledger-cancel">取消</button>
+      <button type="submit" class="primary">建立</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 帳本設定 -->
+<dialog id="settings-dialog">
+  <div class="settings">
+    <h3>帳本設定</h3>
+    <label>帳本名稱<input id="set-name" maxlength="30"></label>
+
+    <section class="field">
+      <span class="field-label">付款／收款人</span>
+      <ul class="manage" id="set-parties"></ul>
+      <form class="manage-add" id="party-add-form">
+        <input name="name" maxlength="20" placeholder="新增一位" required aria-label="名稱">
+        <button class="primary" type="submit">新增</button>
+      </form>
+    </section>
+
+    <section class="field">
+      <div class="field-head">
+        <span class="field-label">分類</span>
+        <div class="seg seg-sm" id="set-cat-kind">
+          <button type="button" data-kind="expense" class="active">支出</button>
+          <button type="button" data-kind="income">收入</button>
+        </div>
+      </div>
+      <ul class="manage" id="set-cats"></ul>
+      <form class="manage-add" id="cat-add-form">
+        <input name="icon" maxlength="8" placeholder="🙂" aria-label="圖示" class="icon-input">
+        <input name="name" maxlength="20" placeholder="新分類名稱" required aria-label="名稱">
+        <button class="primary" type="submit">新增</button>
+      </form>
+    </section>
+
+    <section class="field danger-zone">
+      <span class="field-label">帳本</span>
+      <div class="row-btns">
+        <button type="button" id="set-archive">封存帳本</button>
+        <button type="button" class="danger" id="set-delete">刪除帳本</button>
+      </div>
+      <p class="muted small">封存後不會出現在切換清單上方，資料都保留；只有沒有任何記錄的帳本可以刪除。</p>
+    </section>
+
+    <p class="error" id="set-error"></p>
+    <div class="actions"><span class="spacer"></span><button type="button" class="primary" id="set-close">完成</button></div>
   </div>
 </dialog>
 
