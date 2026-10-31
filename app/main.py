@@ -274,7 +274,7 @@ def health(conn=Depends(get_conn)):
     return {"ok": True}
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def index():
     return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
 

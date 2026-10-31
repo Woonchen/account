@@ -2,7 +2,7 @@
 Description=每天 03:30 備份記帳本
 
 [Timer]
-OnCalendar=*-*-* 03:30:00
+OnCalendar=*-*-* 03:30:00 Asia/Taipei
 Persistent=true
 
 [Install]
