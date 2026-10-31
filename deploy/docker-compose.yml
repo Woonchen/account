@@ -1,0 +1,26 @@
+# 雲端 VM 用。程式碼在 /opt/account/src（git clone），資料在 ${ACCOUNT_HOME}/data（預設 /opt/account）。
+#   啟動／更新：git pull && docker compose -f deploy/docker-compose.yml up -d --build
+#   建帳號：    docker compose -f deploy/docker-compose.yml run --rm web python -m app.cli add-user 帳號 顯示名稱
+# 對外由 finflow 的 caddy 容器轉過來（deploy/account.caddy），所以接到 finflow 的網路 deploy_default，不對到主機的連接埠。
+name: account
+
+services:
+  web:
+    image: account:latest
+    build:
+      context: ..
+      args:
+        UID: ${ACCOUNT_UID:-1001}
+    container_name: account-web
+    restart: unless-stopped
+    environment:
+      ACCOUNT_SESSION_SECRET: ${ACCOUNT_SESSION_SECRET:?請在 deploy/.env 設定 ACCOUNT_SESSION_SECRET}
+    volumes:
+      - ${ACCOUNT_HOME:-/opt/account}/data:/data   # 第一次部署前先 mkdir，不然 docker 會用 root 建立、寫不進去
+    networks: [finflow]
+    mem_limit: 96m
+
+networks:
+  finflow:
+    external: true
+    name: deploy_default

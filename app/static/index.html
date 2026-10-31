@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<title>記帳本</title>
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="icon" href="/static/icons/icon-192.png">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- 登入 -->
+<section id="login" class="screen" hidden>
+  <form id="login-form" class="card login-card">
+    <h1>記帳本</h1>
+    <label>帳號<input name="username" autocomplete="username" required autocapitalize="off"></label>
+    <label>密碼<input name="password" type="password" autocomplete="current-password" required></label>
+    <p class="error" id="login-error"></p>
+    <button class="primary" type="submit">登入</button>
+  </form>
+</section>
+
+<!-- 主畫面 -->
+<section id="main" class="screen" hidden>
+  <header class="topbar">
+    <button class="icon-btn" id="prev-month" aria-label="上個月">‹</button>
+    <h1 id="month-label"></h1>
+    <button class="icon-btn" id="next-month" aria-label="下個月">›</button>
+    <button class="icon-btn menu-btn" id="menu-btn" aria-label="選單">⋯</button>
+  </header>
+  <div class="menu" id="menu" hidden>
+    <p class="muted" id="me-label"></p>
+    <button id="open-categories">分類管理</button>
+    <button id="logout">登出</button>
+  </div>
+
+  <div class="summary">
+    <div><span class="muted">收入</span><strong class="income" id="sum-income">0</strong></div>
+    <div><span class="muted">支出</span><strong class="expense" id="sum-expense">0</strong></div>
+    <div><span class="muted">結餘</span><strong id="sum-balance">0</strong></div>
+  </div>
+
+  <main id="list"></main>
+  <p class="empty muted" id="empty" hidden>這個月還沒有記錄，按右下角＋新增</p>
+
+  <button class="fab" id="add-btn" aria-label="新增一筆">＋</button>
+</section>
+
+<!-- 新增／編輯一筆 -->
+<dialog id="tx-dialog">
+  <form id="tx-form" method="dialog">
+    <div class="seg" id="tx-kind">
+      <button type="button" data-kind="expense" class="active">支出</button>
+      <button type="button" data-kind="income">收入</button>
+    </div>
+    <label class="amount-label">金額
+      <input name="amount" inputmode="numeric" pattern="[0-9]*" required placeholder="0" autocomplete="off">
+    </label>
+    <div class="cat-grid" id="tx-cats"></div>
+    <label>日期<input name="date" type="date" required></label>
+    <label>備註<input name="note" maxlength="200" autocomplete="off"></label>
+    <p class="error" id="tx-error"></p>
+    <p class="muted small" id="tx-meta"></p>
+    <div class="actions">
+      <button type="button" class="danger" id="tx-delete" hidden>刪除</button>
+      <span class="spacer"></span>
+      <button type="button" id="tx-cancel">取消</button>
+      <button type="submit" class="primary">儲存</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 分類管理 -->
+<dialog id="cat-dialog">
+  <div class="cat-manage">
+    <div class="seg" id="cat-kind">
+      <button type="button" data-kind="expense" class="active">支出</button>
+      <button type="button" data-kind="income">收入</button>
+    </div>
+    <ul id="cat-list"></ul>
+    <form id="cat-form" class="cat-add">
+      <input name="icon" maxlength="8" placeholder="🙂" aria-label="圖示" class="icon-input">
+      <input name="name" maxlength="20" placeholder="新分類名稱" required aria-label="名稱">
+      <button class="primary" type="submit">新增</button>
+    </form>
+    <p class="error" id="cat-error"></p>
+    <div class="actions"><span class="spacer"></span><button type="button" id="cat-close">完成</button></div>
+  </div>
+</dialog>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

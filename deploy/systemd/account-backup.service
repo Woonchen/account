@@ -1,0 +1,7 @@
+[Unit]
+Description=記帳本 SQLite 備份
+
+[Service]
+Type=oneshot
+User=ubuntu
+ExecStart=/opt/account/src/deploy/backup.sh

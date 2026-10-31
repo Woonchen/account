@@ -1,0 +1,10 @@
+# 範本：deploy/install-caddy.sh 會把 __ACCOUNT_DOMAIN__ 換成 deploy/.env 的 ACCOUNT_DOMAIN，
+# 寫到 /opt/finflow/caddy/sites/account.caddy（finflow 的 Caddyfile 會 import 進來）
+__ACCOUNT_DOMAIN__ {
+	encode gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	reverse_proxy account-web:8000
+}

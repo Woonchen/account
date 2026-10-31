@@ -1,0 +1,9 @@
+[Unit]
+Description=每天 03:30 備份記帳本
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
