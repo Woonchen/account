@@ -546,6 +546,30 @@ $("#set-delete").addEventListener("click", async () => {
 $("#set-close").addEventListener("click", () => setDialog.close());
 setDialog.addEventListener("close", () => { $("#ledger-name").textContent = state.ledger?.name ?? "記帳本"; if (state.ledger) showView(); });
 
+// ---------- 外觀（自動／淺色／深色） ----------
+// 自動＝跟著系統；手動選的存在這台裝置的 localStorage（index.html 開頭會在載入 CSS 前先套用）
+const THEME_BG = { light: "#f5f5f4", dark: "#1a1a19" };
+function applyTheme(choice) {
+  const root = document.documentElement;
+  if (choice === "light" || choice === "dark") root.dataset.theme = choice;
+  else { delete root.dataset.theme; choice = "auto"; }
+  for (const b of document.querySelectorAll("[data-theme-choice]")) {
+    b.classList.toggle("active", b.dataset.themeChoice === choice);
+    b.setAttribute("aria-pressed", String(b.dataset.themeChoice === choice));
+  }
+  // 手機瀏覽器網址列的顏色：手動選了就兩個都換成那個顏色，自動就各自對應系統
+  const metas = document.querySelectorAll('meta[name="theme-color"]');
+  metas.forEach((m) => { m.content = choice === "auto" ? THEME_BG[m.media.includes("dark") ? "dark" : "light"] : THEME_BG[choice]; });
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-theme-choice]");
+  if (!b) return;
+  e.stopPropagation();  // 不要讓點選外觀把選單關掉
+  store.set("account.theme", b.dataset.themeChoice);
+  applyTheme(b.dataset.themeChoice);
+}, true);
+applyTheme(store.get("account.theme"));
+
 // ---------- 啟動 ----------
 (async () => {
   try {
