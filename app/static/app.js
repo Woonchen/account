@@ -205,20 +205,20 @@ function renderPartyTable() {
   const tbl = $("#party-table");
   tbl.replaceChildren();
   const rows = state.dash.by_party;
-  tbl.append(el("thead", {}, el("tr", {}, ...["", "付款（支出）", "收款（收入）", "淨額"].map((h) => el("th", { textContent: h })))));
+  tbl.append(el("thead", {}, el("tr", {}, ...["", "收款（收入）", "付款（支出）", "淨額"].map((h) => el("th", { textContent: h })))));
   const body = el("tbody");
   for (const p of rows) {
     body.append(el("tr", {},
       el("td", { textContent: p.name }),
-      el("td", { textContent: fmt.format(p.expense) }),
       el("td", { textContent: fmt.format(p.income) }),
+      el("td", { textContent: fmt.format(p.expense) }),
       el("td", { textContent: money(p.income - p.expense) })));
   }
   const sum = (k) => rows.reduce((a, p) => a + p[k], 0);
   tbl.append(body, el("tfoot", {}, el("tr", {},
     el("td", { textContent: "合計" }),
-    el("td", { textContent: fmt.format(sum("expense")) }),
     el("td", { textContent: fmt.format(sum("income")) }),
+    el("td", { textContent: fmt.format(sum("expense")) }),
     el("td", { textContent: money(sum("income") - sum("expense")) }))));
 }
 
