@@ -5,6 +5,7 @@
 會寫入的請求帶了 Origin 就要跟 Host 一致，擋掉跨站送出（cookie 另外有 SameSite=Lax）。
 """
 import datetime as dt
+import hashlib
 import os
 import re
 import sqlite3
@@ -17,6 +18,8 @@ from urllib.parse import urlsplit
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import Headers
+from starlette.staticfiles import NotModifiedResponse
 from pydantic import BaseModel, Field, field_validator
 
 from . import auth, db
@@ -602,9 +605,28 @@ def health(conn=Depends(get_conn)):
     return {"ok": True}
 
 
+def content_etag(response):
+    # ETag 用檔案內容的雜湊，不用修改時間：Docker 重用舊的建置層時檔案時間會倒退，
+    # 瀏覽器拿較新的 If-Modified-Since 來問就會被回 304，卡在舊版。所以也不送 Last-Modified。
+    with open(response.path, "rb") as f:
+        response.headers["etag"] = '"' + hashlib.sha256(f.read()).hexdigest()[:32] + '"'
+    if "last-modified" in response.headers:
+        del response.headers["last-modified"]
+    return response
+
+
+class Static(StaticFiles):
+    def file_response(self, full_path, stat_result, scope, status_code=200):
+        response = content_etag(FileResponse(full_path, stat_result=stat_result, status_code=status_code))
+        if self.is_not_modified(response.headers, Headers(scope=scope)):
+            return NotModifiedResponse(response.headers)
+        return response
+
+
 @app.api_route("/", methods=["GET", "HEAD"])
 def index():
-    return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
+    path = STATIC / "index.html"
+    return content_etag(FileResponse(path, stat_result=os.stat(path), headers={"Cache-Control": "no-cache"}))
 
 
-app.mount("/static", StaticFiles(directory=STATIC), name="static")
+app.mount("/static", Static(directory=STATIC), name="static")

@@ -507,3 +507,15 @@ def test_password_hash_roundtrip():
     assert auth.check_password("hello world!", h)
     assert not auth.check_password("hello world", h)
     assert not auth.check_password("x", "garbage")
+
+
+def test_static_etag_follows_content_not_mtime(client):
+    # 檔案時間倒退（Docker 重用舊建置層）也不能回 304：只看內容雜湊，不送 Last-Modified
+    for path in ("/", "/static/app.js"):
+        r = client.get(path)
+        assert r.status_code == 200 and "last-modified" not in r.headers
+        etag = r.headers["etag"]
+        assert client.get(path, headers={"If-None-Match": etag}).status_code in (200, 304)
+        assert client.get("/static/app.js", headers={"If-Modified-Since": "Fri, 01 Jan 2100 00:00:00 GMT"}).status_code == 200
+        assert client.get("/static/app.js", headers={"If-None-Match": '"stale"'}).status_code == 200
+    assert client.get("/static/app.js", headers={"If-None-Match": client.get("/static/app.js").headers["etag"]}).status_code == 304
