@@ -191,18 +191,19 @@ $("#cat-period-kind").addEventListener("click", (e) => {
 
 // 快速切換帳本／頁面時會同時有好幾個請求，只畫最後發出的那個，舊帳本的回應晚到也不會蓋掉畫面
 let loadToken = 0;
-async function latest(path) {
+async function latest(...paths) {
   const token = ++loadToken;
-  const data = await api(L(path));
+  const data = await Promise.all(paths.map((p) => api(L(p))));
   if (token !== loadToken) throw new Error("stale");
-  return data;
+  return paths.length === 1 ? data[0] : data;
 }
 const ignoreStale = (err) => { if (err.message !== "stale") throw err; };
 
 async function loadDashboard() { return drawDashboard().catch(ignoreStale); }
 async function drawDashboard() {
-  const d = await latest("/dashboard");
+  const [d, settle] = await latest("/dashboard", "/settlement");
   state.dash = d;
+  renderGauges(settle);
   const t = d.totals;
   $("#t-income").textContent = fmt.format(t.income);
   $("#t-expense").textContent = fmt.format(t.expense);
@@ -214,6 +215,72 @@ async function drawDashboard() {
   $("#dash-body").hidden = !t.count;
   renderPartyTable();
   renderCatBars();
+}
+
+// 預算剩餘指針錶：剩餘％＝(預算 − 花費) ÷ 預算；左邊 0%、右邊 100%，超支時指針停在 0
+const LOW = 0.2;  // 剩不到 20% 用警告色並標「快用完」
+function gaugeSvg(frac) {
+  const cx = 100, cy = 100, r = 80;
+  const at = (p, rr = r) => {  // p：0（左）→ 1（右）
+    const a = Math.PI * (1 - p);
+    return [cx + rr * Math.cos(a), cy - rr * Math.sin(a)];
+  };
+  const root = svg("svg", { viewBox: "-6 8 212 108", "aria-hidden": "true" });
+  root.append(svg("path", { d: `M${cx - r},${cy} A${r},${r} 0 0 1 ${cx + r},${cy}`, class: "track" }));
+  if (frac > 0.001) {
+    const [x, y] = at(frac);
+    root.append(svg("path", { d: `M${cx - r},${cy} A${r},${r} 0 0 1 ${x.toFixed(2)},${y.toFixed(2)}`, class: "value" }));
+  }
+  for (const p of [0, 0.25, 0.5, 0.75, 1]) {
+    const [x1, y1] = at(p, r - 12), [x2, y2] = at(p, r - 18);
+    root.append(svg("line", { x1, y1, x2, y2, class: "tick" }));
+  }
+  for (const [p, label, anchor] of [[0, "0%", "middle"], [1, "100%", "middle"]]) {
+    const [x, y] = at(p, r);
+    const t = svg("text", { x, y: y + 16, "text-anchor": anchor, class: "tick-text" });
+    t.textContent = label;
+    root.append(t);
+  }
+  // 指針先畫成指向左邊（0%），再旋轉到位置，才有轉動的動畫
+  const needle = svg("line", { x1: cx, y1: cy, x2: cx - (r - 22), y2: cy, class: "needle" });
+  needle.style.transformOrigin = `${cx}px ${cy}px`;
+  needle.style.transform = "rotate(0deg)";
+  root.append(needle, svg("circle", { cx, cy, r: 6, class: "hub" }));
+  requestAnimationFrame(() => requestAnimationFrame(() => { needle.style.transform = `rotate(${frac * 180}deg)`; }));
+  return root;
+}
+function svg(tag, attrs = {}) {
+  const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  return e;
+}
+
+function renderGauges(settle) {
+  $("#budget-card-note").textContent = settle.settled ? "已結算，是結算當時的數字" : "";
+  const box = $("#gauges");
+  box.replaceChildren();
+  for (const l of settle.lines) {
+    let cls = "gauge", pct, sub, frac;
+    if (l.budget <= 0) {
+      cls += " none"; frac = 0; pct = "未設定預算"; sub = `已花 ${fmt.format(l.spent)}`;
+    } else if (l.remaining < 0) {
+      cls += " over"; frac = 0;
+      pct = `超支 ${Math.round((-l.remaining / l.budget) * 100)}%`;
+      sub = `超支 ${fmt.format(-l.remaining)}／預算 ${fmt.format(l.budget)}`;
+    } else {
+      frac = l.remaining / l.budget;
+      if (frac < LOW) cls += " low";
+      pct = `剩 ${Math.round(frac * 100)}%`;
+      sub = `剩餘 ${fmt.format(l.remaining)}／預算 ${fmt.format(l.budget)}`;
+    }
+    const status = cls.includes("low") ? "快用完" : "";
+    const g = el("div", { className: cls, role: "img", ariaLabel: `${l.name}：${pct}，${sub}` },
+      gaugeSvg(frac),
+      el("div", { className: "g-name", textContent: l.name }),
+      el("div", { className: "g-pct", textContent: pct }),
+      el("div", { className: "g-sub", textContent: sub + (status ? `（${status}）` : "") }));
+    box.append(g);
+  }
 }
 
 function renderPartyTable() {
