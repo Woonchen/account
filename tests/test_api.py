@@ -320,9 +320,9 @@ def test_settlement_preview_counts_only_expenses(client):
     post(client, f"/api/ledgers/{led['id']}/parties", {"name": "阿嬤"})
     s = client.get(f"/api/ledgers/{led['id']}/settlement").json()
     assert s["settled"] is False
-    assert [(l["name"], l["budget"], l["spent"], l["diff"]) for l in s["lines"]] == [
-        ("成", 10000, 3500, -6500), ("圓", 8000, 9000, 1000), ("寶貝基金", 5000, 7777, 2777)]
-    assert s["total"] == {"budget": 23000, "spent": 20277, "diff": -2723}
+    assert [(l["name"], l["budget"], l["spent"], l["remaining"]) for l in s["lines"]] == [
+        ("成", 10000, 3500, 6500), ("圓", 8000, 9000, -1000), ("寶貝基金", 5000, 7777, -2777)]
+    assert s["total"] == {"budget": 23000, "spent": 20277, "remaining": 2723}
 
 
 def test_settlement_without_party_named_cheng(client):

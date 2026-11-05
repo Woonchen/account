@@ -537,9 +537,9 @@ def spent_by_name(conn, lid):
 
 
 def settlement_result(lines, settled=None):
-    """差額＝花費 − 預算：正數是超支，負數是還剩多少。"""
-    out = [{"name": l["name"], "budget": l["budget"], "spent": l["spent"], "diff": l["spent"] - l["budget"]} for l in lines]
-    total = {k: sum(l[k] for l in out) for k in ("budget", "spent", "diff")}
+    """剩餘＝預算 − 花費：正數是還剩多少，負數是超支。"""
+    out = [{"name": l["name"], "budget": l["budget"], "spent": l["spent"], "remaining": l["budget"] - l["spent"]} for l in lines]
+    total = {k: sum(l[k] for l in out) for k in ("budget", "spent", "remaining")}
     return {"settled": settled is not None,
             "settled_at": settled["settled_at"] if settled else None,
             "settled_by": settled["display_name"] if settled else None,

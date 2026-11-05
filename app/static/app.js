@@ -556,9 +556,9 @@ $("#set-close").addEventListener("click", () => setDialog.close());
 setDialog.addEventListener("close", () => { $("#ledger-name").textContent = state.ledger?.name ?? "記帳本"; if (state.ledger) showView(); });
 
 // ---------- 結算 ----------
-function diffText(diff) {
-  if (diff > 0) return { label: "超支", value: fmt.format(diff), over: true };
-  if (diff < 0) return { label: "剩餘", value: fmt.format(-diff), over: false };
+function remainText(remaining) {
+  if (remaining < 0) return { label: "超支", value: fmt.format(-remaining), over: true };
+  if (remaining > 0) return { label: "剩餘", value: fmt.format(remaining), over: false };
   return { label: "剛好用完", value: "0", over: false };
 }
 
@@ -580,7 +580,7 @@ async function loadSettlement() {
   const cards = $("#settle-cards");
   cards.replaceChildren();
   for (const l of s.lines) {
-    const d = diffText(l.diff);
+    const d = remainText(l.remaining);
     const pct = l.budget > 0 ? Math.round((l.spent / l.budget) * 100) : null;
     const meter = el("div", { className: `meter${d.over ? " over" : ""}` }, el("div"));
     meter.firstChild.style.width = `${pct === null ? (l.spent ? 100 : 0) : Math.min(100, pct)}%`;
@@ -593,19 +593,19 @@ async function loadSettlement() {
       el("dl", {},
         el("dt", { textContent: "預算" }), el("dd", { textContent: fmt.format(l.budget) }),
         el("dt", { textContent: "花費" }), el("dd", { textContent: fmt.format(l.spent) }),
-        el("dt", { textContent: "差額（花費 − 預算）" }), el("dd", { textContent: (l.diff > 0 ? "+" : "") + money(l.diff) }))));
+        el("dt", { textContent: "剩餘（預算 − 花費）" }), el("dd", { textContent: money(l.remaining) }))));
   }
 
   const tbl = $("#settle-table");
-  tbl.replaceChildren(el("thead", {}, el("tr", {}, ...["", "預算", "花費", "差額", ""].map((h) => el("th", { textContent: h })))));
+  tbl.replaceChildren(el("thead", {}, el("tr", {}, ...["", "預算", "花費", "剩餘", ""].map((h) => el("th", { textContent: h })))));
   const body = el("tbody");
   const row = (name, x, strong) => {
-    const d = diffText(x.diff);
+    const d = remainText(x.remaining);
     return el("tr", {},
       el("td", { textContent: name }),
       el("td", { textContent: fmt.format(x.budget) }),
       el("td", { textContent: fmt.format(x.spent) }),
-      el("td", { textContent: (x.diff > 0 ? "+" : "") + money(x.diff) }),
+      el("td", { textContent: money(x.remaining) }),
       el("td", { textContent: d.label, className: d.over ? "danger" : "muted" }));
   };
   for (const l of s.lines) body.append(row(l.name, l));
