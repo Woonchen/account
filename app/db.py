@@ -1,13 +1,14 @@
 """SQLite：連線、建表、遷移、新帳本的預設內容。資料檔位置由 ACCOUNT_DB 決定（預設 data/account.db）。
 
 結構：帳本 ledgers → 每本帳本各自的成員 parties（誰付款／收款）與分類 categories → 收支記錄 transactions。
+帳本之上有全域預算 budgets（固定 成、圓）；帳本「完成結算」時把當時的預算與花費存進 settlements／settlement_lines。
 所有登入的帳號共用全部帳本。schema 版本記在 PRAGMA user_version。
 """
 import os
 import sqlite3
 from pathlib import Path
 
-VERSION = 1
+VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -56,9 +57,27 @@ CREATE TABLE IF NOT EXISTS transactions (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_tx_ledger_date ON transactions(ledger_id, date);
+CREATE TABLE IF NOT EXISTS budgets (
+    name TEXT PRIMARY KEY,
+    amount INTEGER NOT NULL DEFAULT 0 CHECK (amount >= 0),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS settlements (
+    ledger_id INTEGER PRIMARY KEY REFERENCES ledgers(id) ON DELETE CASCADE,
+    settled_by INTEGER REFERENCES users(id),
+    settled_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS settlement_lines (
+    ledger_id INTEGER NOT NULL REFERENCES settlements(ledger_id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    budget INTEGER NOT NULL,
+    spent INTEGER NOT NULL,
+    PRIMARY KEY (ledger_id, name)
+);
 """
 
 DEFAULT_PARTIES = ["成", "圓", "寶貝基金"]
+BUDGET_NAMES = ["成", "圓"]  # 全域預算固定這兩位；帳本裡同名的付款人套用
 DEFAULT_CATEGORIES = [
     ("expense", "餐飲", "🍜"), ("expense", "交通", "🚌"), ("expense", "購物", "🛍️"),
     ("expense", "居家", "🏠"), ("expense", "娛樂", "🎬"), ("expense", "醫療", "💊"),
@@ -99,6 +118,7 @@ def init(conn):
     if cols and "ledger_id" not in cols:
         migrate_v0(conn)
     create_schema(conn)
+    conn.executemany("INSERT OR IGNORE INTO budgets (name) VALUES (?)", [(n,) for n in BUDGET_NAMES])
     conn.execute(f"PRAGMA user_version = {VERSION}")
     conn.commit()
 

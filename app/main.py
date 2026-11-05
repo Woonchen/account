@@ -161,8 +161,22 @@ class LedgerPatch(BaseModel):
     archived: bool | None = None
 
 
+LEDGER_SELECT = "SELECT l.*, s.settled_at FROM ledgers l LEFT JOIN settlements s ON s.ledger_id = l.id"
+
+
 def ledger_dict(r):
-    return {"id": r["id"], "name": r["name"], "archived": bool(r["archived"]), "created_at": r["created_at"]}
+    return {"id": r["id"], "name": r["name"], "archived": bool(r["archived"]), "created_at": r["created_at"],
+            "settled": r["settled_at"] is not None}
+
+
+def ledger_row(conn, lid):
+    return conn.execute(LEDGER_SELECT + " WHERE l.id = ?", (lid,)).fetchone()
+
+
+def check_unsettled(conn, lid):
+    """結算後記錄就鎖住，結算結果才會跟記錄對得上；要改請先取消結算。"""
+    if conn.execute("SELECT 1 FROM settlements WHERE ledger_id = ?", (lid,)).fetchone():
+        raise HTTPException(409, "這本帳本已經結算，要先取消結算才能修改記錄")
 
 
 def get_ledger(lid: int, user=Depends(current_user), conn=Depends(get_conn)):
@@ -174,7 +188,7 @@ def get_ledger(lid: int, user=Depends(current_user), conn=Depends(get_conn)):
 
 @app.get("/api/ledgers")
 def list_ledgers(user=Depends(current_user), conn=Depends(get_conn)):
-    rows = conn.execute("SELECT * FROM ledgers ORDER BY archived, id").fetchall()
+    rows = conn.execute(LEDGER_SELECT + " ORDER BY l.archived, l.id").fetchall()
     return [ledger_dict(r) for r in rows]
 
 
@@ -192,7 +206,7 @@ def create_ledger(body: LedgerIn, user=Depends(current_user), conn=Depends(get_c
 @app.get("/api/ledgers/{lid}")
 def ledger_detail(lid: int = Depends(get_ledger), user=Depends(current_user), conn=Depends(get_conn)):
     """帳本＋成員＋分類，前端切換帳本時一次拿齊。"""
-    led = conn.execute("SELECT * FROM ledgers WHERE id = ?", (lid,)).fetchone()
+    led = ledger_row(conn, lid)
     parties = conn.execute("SELECT * FROM parties WHERE ledger_id = ? ORDER BY sort_order, id", (lid,)).fetchall()
     cats = conn.execute("SELECT * FROM categories WHERE ledger_id = ? ORDER BY kind DESC, sort_order, id", (lid,)).fetchall()
     return ledger_dict(led) | {"parties": [party_dict(p) for p in parties], "categories": [category_dict(c) for c in cats]}
@@ -204,7 +218,7 @@ def update_ledger(body: LedgerPatch, lid: int = Depends(get_ledger), user=Depend
     if "name" in fields:
         fields["name"] = fields["name"].strip()
     patch_row(conn, "ledgers", lid, fields, "")
-    return ledger_dict(conn.execute("SELECT * FROM ledgers WHERE id = ?", (lid,)).fetchone())
+    return ledger_dict(ledger_row(conn, lid))
 
 
 @app.delete("/api/ledgers/{lid}")
@@ -393,6 +407,7 @@ def list_transactions(month: str | None = None, party_id: int | None = None,
 
 @app.post("/api/ledgers/{lid}/transactions", status_code=201)
 def create_transaction(body: TransactionIn, lid: int = Depends(get_ledger), user=Depends(current_user), conn=Depends(get_conn)):
+    check_unsettled(conn, lid)
     check_refs(conn, lid, body)
     cur = conn.execute(
         """INSERT INTO transactions (ledger_id, kind, amount, date, party_id, category_id, note, created_by)
@@ -406,6 +421,7 @@ def create_transaction(body: TransactionIn, lid: int = Depends(get_ledger), user
 @app.patch("/api/ledgers/{lid}/transactions/{tid}")
 def update_transaction(tid: int, body: TransactionIn, lid: int = Depends(get_ledger), user=Depends(current_user), conn=Depends(get_conn)):
     get_tx(conn, lid, tid)
+    check_unsettled(conn, lid)
     check_refs(conn, lid, body)
     conn.execute(
         """UPDATE transactions SET kind = ?, amount = ?, date = ?, party_id = ?, category_id = ?, note = ?,
@@ -419,6 +435,7 @@ def update_transaction(tid: int, body: TransactionIn, lid: int = Depends(get_led
 @app.delete("/api/ledgers/{lid}/transactions/{tid}")
 def delete_transaction(tid: int, lid: int = Depends(get_ledger), user=Depends(current_user), conn=Depends(get_conn)):
     get_tx(conn, lid, tid)
+    check_unsettled(conn, lid)
     conn.execute("DELETE FROM transactions WHERE id = ?", (tid,))
     conn.commit()
     log(f"刪除記錄 #{tid}（帳本 #{lid}，{user['username']}）")
@@ -475,6 +492,93 @@ def dashboard(start: str | None = None, end: str | None = None,
         "by_party": parties,
         "by_category": [dict(r) for r in by_cat],
     }
+
+
+# ---------- 全域預算 ----------
+class BudgetItem(BaseModel):
+    name: str
+    amount: int = Field(ge=0, le=MAX_AMOUNT)
+
+
+class BudgetsIn(BaseModel):
+    items: list[BudgetItem]
+
+
+def current_budgets(conn):
+    rows = {r["name"]: r for r in conn.execute("SELECT * FROM budgets")}
+    return [{"name": n, "amount": rows[n]["amount"], "updated_at": rows[n]["updated_at"]} for n in db.BUDGET_NAMES]
+
+
+@app.get("/api/budgets")
+def get_budgets(user=Depends(current_user), conn=Depends(get_conn)):
+    return current_budgets(conn)
+
+
+@app.put("/api/budgets")
+def put_budgets(body: BudgetsIn, user=Depends(current_user), conn=Depends(get_conn)):
+    for item in body.items:
+        if item.name not in db.BUDGET_NAMES:
+            raise HTTPException(422, f"只能設定{'、'.join(db.BUDGET_NAMES)}的預算")
+    conn.executemany("UPDATE budgets SET amount = ?, updated_at = datetime('now') WHERE name = ?",
+                     [(i.amount, i.name) for i in body.items])
+    conn.commit()
+    log(f"更新預算 {', '.join(f'{i.name}={i.amount}' for i in body.items)}（{user['username']}）")
+    return current_budgets(conn)
+
+
+# ---------- 結算 ----------
+def spent_by_name(conn, lid):
+    """這本帳本裡，名字是成、圓的付款人各自付的支出合計（收款不算）。"""
+    marks = ",".join("?" * len(db.BUDGET_NAMES))
+    rows = conn.execute(f"""SELECT p.name, SUM(t.amount) AS spent FROM transactions t JOIN parties p ON p.id = t.party_id
+                            WHERE t.ledger_id = ? AND t.kind = 'expense' AND p.name IN ({marks})
+                            GROUP BY p.name""", (lid, *db.BUDGET_NAMES)).fetchall()
+    return {r["name"]: r["spent"] for r in rows}
+
+
+def settlement_result(lines, settled=None):
+    """差額＝花費 − 預算：正數是超支，負數是還剩多少。"""
+    out = [{"name": l["name"], "budget": l["budget"], "spent": l["spent"], "diff": l["spent"] - l["budget"]} for l in lines]
+    total = {k: sum(l[k] for l in out) for k in ("budget", "spent", "diff")}
+    return {"settled": settled is not None,
+            "settled_at": settled["settled_at"] if settled else None,
+            "settled_by": settled["display_name"] if settled else None,
+            "lines": out, "total": total}
+
+
+@app.get("/api/ledgers/{lid}/settlement")
+def get_settlement(lid: int = Depends(get_ledger), user=Depends(current_user), conn=Depends(get_conn)):
+    """已結算就回傳當時存下的結果；還沒結算就用現在的全域預算試算。"""
+    settled = conn.execute("""SELECT s.settled_at, u.display_name FROM settlements s LEFT JOIN users u ON u.id = s.settled_by
+                              WHERE s.ledger_id = ?""", (lid,)).fetchone()
+    if settled:
+        lines = conn.execute("SELECT name, budget, spent FROM settlement_lines WHERE ledger_id = ?", (lid,)).fetchall()
+        order = {n: i for i, n in enumerate(db.BUDGET_NAMES)}
+        return settlement_result(sorted(lines, key=lambda l: order.get(l["name"], 99)), settled)
+    spent = spent_by_name(conn, lid)
+    return settlement_result([{"name": b["name"], "budget": b["amount"], "spent": spent.get(b["name"], 0)}
+                              for b in current_budgets(conn)])
+
+
+@app.post("/api/ledgers/{lid}/settlement", status_code=201)
+def settle(lid: int = Depends(get_ledger), user=Depends(current_user), conn=Depends(get_conn)):
+    check_unsettled(conn, lid)
+    preview = get_settlement(lid, user, conn)
+    conn.execute("INSERT INTO settlements (ledger_id, settled_by) VALUES (?, ?)", (lid, user["id"]))
+    conn.executemany("INSERT INTO settlement_lines (ledger_id, name, budget, spent) VALUES (?, ?, ?, ?)",
+                     [(lid, l["name"], l["budget"], l["spent"]) for l in preview["lines"]])
+    conn.commit()
+    log(f"完成結算 帳本 #{lid}（{user['username']}）")
+    return get_settlement(lid, user, conn)
+
+
+@app.delete("/api/ledgers/{lid}/settlement")
+def unsettle(lid: int = Depends(get_ledger), user=Depends(current_user), conn=Depends(get_conn)):
+    if conn.execute("DELETE FROM settlements WHERE ledger_id = ?", (lid,)).rowcount == 0:
+        raise HTTPException(404, "這本帳本還沒有結算")
+    conn.commit()
+    log(f"取消結算 帳本 #{lid}（{user['username']}）")
+    return get_settlement(lid, user, conn)
 
 
 # ---------- 頁面 ----------

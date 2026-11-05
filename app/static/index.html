@@ -43,6 +43,8 @@
           <div class="popover-sep"></div>
           <button id="new-ledger">＋ 新增帳本</button>
           <button id="ledger-settings">⚙︎ 帳本設定</button>
+          <div class="popover-sep"></div>
+          <button id="global-settings">💰 全域設定（預算）</button>
         </div>
       </div>
       <div class="user-switch">
@@ -63,6 +65,7 @@
     <nav class="tabs" aria-label="主要頁面">
       <a href="#dashboard" data-view="dashboard"><span aria-hidden="true">📊</span>儀表板</a>
       <a href="#records" data-view="records"><span aria-hidden="true">📝</span>記帳</a>
+      <a href="#settle" data-view="settle"><span aria-hidden="true">🧾</span>結算</a>
     </nav>
     <div class="side-foot">
       <div class="seg seg-sm theme-seg" role="group" aria-label="外觀">
@@ -131,6 +134,7 @@
         <h2>記帳</h2>
         <button class="primary add-inline" id="add-inline">＋ 記一筆</button>
       </header>
+      <p class="notice" id="settled-notice" hidden>🔒 這本帳本已經結算，記錄已鎖定。要修改請到<a href="#settle">結算</a>取消結算。</p>
 
       <div class="month-sum">
         <div><span class="muted">收入</span><strong id="m-income">0</strong></div>
@@ -148,10 +152,58 @@
       </div>
       <p class="empty muted" id="empty" hidden>這個月還沒有記錄</p>
     </section>
+
+    <!-- 結算 -->
+    <section id="view-settle" class="view" hidden>
+      <header class="view-head">
+        <h2>結算</h2>
+        <span class="status" id="settle-status"></span>
+      </header>
+      <p class="muted small" id="settle-note"></p>
+
+      <div class="notice" id="settle-nobudget" hidden>
+        還沒設定預算，結算時預算都會是 0。
+        <button type="button" class="link" id="settle-set-budget">去設定預算</button>
+      </div>
+
+      <div class="settle-grid" id="settle-cards"></div>
+
+      <section class="card settle-total">
+        <table class="num-table" id="settle-table"></table>
+      </section>
+
+      <p class="muted small settle-explain">花費＝這本帳本裡記在成、圓名下的<strong>支出</strong>（收款不算）；差額＝花費 − 預算，正數是超支、負數是還剩下的預算。</p>
+
+      <div class="actions settle-actions">
+        <button type="button" class="link" id="settle-edit-budget">修改全域預算</button>
+        <span class="spacer"></span>
+        <button type="button" class="danger" id="settle-undo" hidden>取消結算</button>
+        <button type="button" class="primary" id="settle-do" hidden>完成結算</button>
+      </div>
+    </section>
   </main>
 
   <button class="fab" id="add-btn" aria-label="記一筆" hidden>＋</button>
 </div>
+
+<!-- 全域設定 -->
+<dialog id="global-dialog">
+  <form id="global-form">
+    <h3>全域設定</h3>
+    <p class="muted small">這裡的設定套用到所有帳本。每本帳本結算時，會拿成、圓在那本帳本的支出減去這裡的預算。</p>
+    <div class="field">
+      <span class="field-label">每本帳本的預算</span>
+      <div id="budget-inputs" class="budget-inputs"></div>
+    </div>
+    <p class="muted small">已經完成結算的帳本會保留當時的預算，改這裡不會影響它們。</p>
+    <p class="error" id="global-error"></p>
+    <div class="actions">
+      <span class="spacer"></span>
+      <button type="button" id="global-cancel">取消</button>
+      <button type="submit" class="primary">儲存</button>
+    </div>
+  </form>
+</dialog>
 
 <!-- 新增／編輯一筆 -->
 <dialog id="tx-dialog">

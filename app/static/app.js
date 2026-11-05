@@ -128,7 +128,8 @@ function renderLedgerMenu() {
   const active = state.ledgers.filter((l) => !l.archived);
   const archived = state.ledgers.filter((l) => l.archived);
   const item = (l) => {
-    const b = el("button", { type: "button", textContent: l.name, className: l.id === state.ledger?.id ? "current" : "" });
+    const b = el("button", { type: "button", className: l.id === state.ledger?.id ? "current" : "" },
+      el("span", {}, l.name, l.settled ? el("span", { className: "tag", textContent: "已結算" }) : null));
     b.addEventListener("click", () => switchLedger(l.id));
     return b;
   };
@@ -162,17 +163,20 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePopov
 // ---------- 頁面切換（網址 #dashboard／#records，上一頁可用） ----------
 function showView() {
   const v = location.hash.slice(1);
-  state.view = v === "records" ? "records" : "dashboard";
+  state.view = ["records", "settle"].includes(v) ? v : "dashboard";
   const has = !!state.ledger;
+  const locked = has && state.ledger.settled;
   $("#view-empty").hidden = has;
-  $("#view-dashboard").hidden = !has || state.view !== "dashboard";
-  $("#view-records").hidden = !has || state.view !== "records";
-  $("#add-btn").hidden = !has;
+  for (const name of ["dashboard", "records", "settle"]) $(`#view-${name}`).hidden = !has || state.view !== name;
+  $("#add-btn").hidden = !has || locked || state.view === "settle";
+  $("#add-inline").hidden = locked;
+  $("#settled-notice").hidden = !locked;
   $(".tabs").hidden = !has;
   for (const a of document.querySelectorAll(".tabs a")) a.classList.toggle("active", a.dataset.view === state.view);
   if (!has) return;
   if (state.view === "dashboard") loadDashboard();
-  else loadRecords();
+  else if (state.view === "records") loadRecords();
+  else loadSettlement();
 }
 window.addEventListener("hashchange", showView);
 
@@ -350,9 +354,14 @@ function openTx(t = null) {
   txForm.amount.value = t ? t.amount : "";
   txForm.date.value = t ? t.date : today();
   txForm.note.value = t ? t.note : "";
-  $("#tx-delete").hidden = !t;
-  $("#tx-meta").textContent = t ? `${t.created_by} 記的` + (t.updated_at !== t.created_at ? "（改過）" : "") : "";
+  const locked = state.ledger.settled;
+  $("#tx-delete").hidden = !t || locked;
+  txForm.querySelector("button[type=submit]").hidden = locked;
+  $("#tx-cancel").textContent = locked ? "關閉" : "取消";
+  $("#tx-meta").textContent = (t ? `${t.created_by} 記的` + (t.updated_at !== t.created_at ? "（改過）" : "") : "")
+    + (locked ? "　🔒 已結算，不能修改" : "");
   renderTxChoices();
+  for (const x of txForm.querySelectorAll("input, #tx-kind button, #tx-parties button, #tx-cats button")) x.disabled = locked;
   txDialog.showModal();
   if (!t && matchMedia("(min-width: 900px)").matches) txForm.amount.focus();
 }
@@ -545,6 +554,115 @@ $("#set-delete").addEventListener("click", async () => {
 });
 $("#set-close").addEventListener("click", () => setDialog.close());
 setDialog.addEventListener("close", () => { $("#ledger-name").textContent = state.ledger?.name ?? "記帳本"; if (state.ledger) showView(); });
+
+// ---------- 結算 ----------
+function diffText(diff) {
+  if (diff > 0) return { label: "超支", value: fmt.format(diff), over: true };
+  if (diff < 0) return { label: "剩餘", value: fmt.format(-diff), over: false };
+  return { label: "剛好用完", value: "0", over: false };
+}
+
+function localTime(utc) {  // SQLite datetime('now') 是 UTC 的「YYYY-MM-DD HH:MM:SS」
+  const d = new Date(utc.replace(" ", "T") + "Z");
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+async function loadSettlement() {
+  const s = await api(L("/settlement"));
+  const status = $("#settle-status");
+  status.textContent = s.settled ? "已結算" : "試算中";
+  status.className = s.settled ? "status done" : "status";
+  $("#settle-note").textContent = s.settled
+    ? `${s.settled_by || ""} 於 ${localTime(s.settled_at)} 完成結算，數字是當時的預算與花費。`
+    : "用目前的全域預算即時試算；按「完成結算」後會存下結果，並鎖定這本帳本的記錄。";
+  $("#settle-nobudget").hidden = s.settled || s.lines.some((l) => l.budget > 0);
+
+  const cards = $("#settle-cards");
+  cards.replaceChildren();
+  for (const l of s.lines) {
+    const d = diffText(l.diff);
+    const pct = l.budget > 0 ? Math.round((l.spent / l.budget) * 100) : null;
+    const meter = el("div", { className: `meter${d.over ? " over" : ""}` }, el("div"));
+    meter.firstChild.style.width = `${pct === null ? (l.spent ? 100 : 0) : Math.min(100, pct)}%`;
+    cards.append(el("section", { className: "settle-card" },
+      el("h3", { textContent: l.name }),
+      el("div", { className: "verdict", textContent: d.label }),
+      el("div", { className: `big${d.over ? " over" : ""}`, textContent: d.value }),
+      meter,
+      el("div", { className: "meter-label", textContent: pct === null ? "沒有設定預算" : `已用預算 ${pct}%` }),
+      el("dl", {},
+        el("dt", { textContent: "預算" }), el("dd", { textContent: fmt.format(l.budget) }),
+        el("dt", { textContent: "花費" }), el("dd", { textContent: fmt.format(l.spent) }),
+        el("dt", { textContent: "差額（花費 − 預算）" }), el("dd", { textContent: (l.diff > 0 ? "+" : "") + money(l.diff) }))));
+  }
+
+  const tbl = $("#settle-table");
+  tbl.replaceChildren(el("thead", {}, el("tr", {}, ...["", "預算", "花費", "差額", ""].map((h) => el("th", { textContent: h })))));
+  const body = el("tbody");
+  const row = (name, x, strong) => {
+    const d = diffText(x.diff);
+    return el("tr", {},
+      el("td", { textContent: name }),
+      el("td", { textContent: fmt.format(x.budget) }),
+      el("td", { textContent: fmt.format(x.spent) }),
+      el("td", { textContent: (x.diff > 0 ? "+" : "") + money(x.diff) }),
+      el("td", { textContent: d.label, className: d.over ? "danger" : "muted" }));
+  };
+  for (const l of s.lines) body.append(row(l.name, l));
+  tbl.append(body, el("tfoot", {}, row("合計", s.total)));
+
+  $("#settle-do").hidden = s.settled;
+  $("#settle-undo").hidden = !s.settled;
+}
+
+async function afterSettleChange() {
+  await reloadLedger();
+  await loadLedgers();
+  showView();
+}
+$("#settle-do").addEventListener("click", async () => {
+  if (!confirm(`完成「${state.ledger.name}」的結算？\n結算後這本帳本的記錄會鎖定，之後改全域預算也不會影響這次的結果。`)) return;
+  try { await api(L("/settlement"), { method: "POST" }); } catch (err) { alert(err.message); }
+  await afterSettleChange();
+});
+$("#settle-undo").addEventListener("click", async () => {
+  if (!confirm("取消結算？記錄會解鎖，結算會改回用目前的全域預算試算。")) return;
+  try { await api(L("/settlement"), { method: "DELETE" }); } catch (err) { alert(err.message); }
+  await afterSettleChange();
+});
+
+// ---------- 全域設定（成、圓的預算） ----------
+const globalDialog = $("#global-dialog");
+async function openGlobal() {
+  closePopovers();
+  $("#global-error").textContent = "";
+  const budgets = await api("/api/budgets");
+  $("#budget-inputs").replaceChildren(...budgets.map((b) =>
+    el("label", {}, el("span", { textContent: b.name }),
+      el("input", { name: b.name, inputMode: "numeric", value: b.amount ? b.amount : "", placeholder: "0", autocomplete: "off", ariaLabel: `${b.name}的預算` }))));
+  globalDialog.showModal();
+}
+$("#global-settings").addEventListener("click", openGlobal);
+$("#settle-set-budget").addEventListener("click", openGlobal);
+$("#settle-edit-budget").addEventListener("click", openGlobal);
+$("#global-cancel").addEventListener("click", () => globalDialog.close());
+$("#global-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const items = [];
+  for (const input of $("#budget-inputs").querySelectorAll("input")) {
+    const v = input.value.replace(/[,\s]/g, "");
+    const amount = v === "" ? 0 : Number(v);
+    if (!Number.isInteger(amount) || amount < 0) { $("#global-error").textContent = `${input.name}的預算要是 0 或正整數`; return; }
+    items.push({ name: input.name, amount });
+  }
+  try {
+    await api("/api/budgets", { method: "PUT", body: { items } });
+    globalDialog.close();
+    if (state.ledger && state.view === "settle") loadSettlement();
+  } catch (err) {
+    $("#global-error").textContent = err.message;
+  }
+});
 
 // ---------- 外觀（自動／淺色／深色） ----------
 // 自動＝跟著系統；手動選的存在這台裝置的 localStorage（index.html 開頭會在載入 CSS 前先套用）

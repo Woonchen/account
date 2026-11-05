@@ -290,6 +290,85 @@ def test_dashboard(client):
     assert client.get(f"{url}?start=bad").status_code == 422
 
 
+# ---------- 全域預算與結算 ----------
+def set_budgets(c, cheng, yuan):
+    return c.put("/api/budgets", json={"items": [{"name": "成", "amount": cheng}, {"name": "圓", "amount": yuan}]}, headers=ORIGIN)
+
+
+def test_budgets(client):
+    login(client)
+    assert [(b["name"], b["amount"]) for b in client.get("/api/budgets").json()] == [("成", 0), ("圓", 0)]
+    r = set_budgets(client, 20000, 15000)
+    assert [(b["name"], b["amount"]) for b in r.json()] == [("成", 20000), ("圓", 15000)]
+    assert client.put("/api/budgets", json={"items": [{"name": "寶貝基金", "amount": 1}]}, headers=ORIGIN).status_code == 422
+    assert set_budgets(client, -1, 0).status_code == 422
+    client.post("/api/logout", headers=ORIGIN)
+    assert client.get("/api/budgets").status_code == 401
+
+
+def test_settlement_preview_counts_only_expenses_of_cheng_and_yuan(client):
+    login(client)
+    set_budgets(client, 10000, 8000)
+    led = new_ledger(client)
+    add(client, led, party="成", amount=3000)
+    add(client, led, "交通", "成", amount=500)
+    add(client, led, party="圓", amount=9000)
+    add(client, led, party="寶貝基金", amount=7777)               # 不是成、圓，不算
+    add(client, led, "薪資", "成", "income", amount=50000)       # 收款不算
+    s = client.get(f"/api/ledgers/{led['id']}/settlement").json()
+    assert s["settled"] is False
+    assert [(l["name"], l["budget"], l["spent"], l["diff"]) for l in s["lines"]] == [("成", 10000, 3500, -6500), ("圓", 8000, 9000, 1000)]
+    assert s["total"] == {"budget": 18000, "spent": 12500, "diff": -5500}
+
+
+def test_settlement_without_party_named_cheng(client):
+    login(client)
+    set_budgets(client, 100, 100)
+    led = new_ledger(client, parties=["阿明"])
+    s = client.get(f"/api/ledgers/{led['id']}/settlement").json()
+    assert [l["spent"] for l in s["lines"]] == [0, 0]
+
+
+def test_settle_snapshot_and_lock(client):
+    login(client)
+    set_budgets(client, 10000, 8000)
+    led = new_ledger(client)
+    base = f"/api/ledgers/{led['id']}"
+    t = add(client, led, party="成", amount=4000).json()
+
+    r = post(client, f"{base}/settlement", {})
+    assert r.status_code == 201 and r.json()["settled"] is True and r.json()["settled_by"] == "Nick"
+    assert post(client, f"{base}/settlement", {}).status_code == 409
+    assert next(l for l in client.get("/api/ledgers").json() if l["id"] == led["id"])["settled"] is True
+
+    # 之後改全域預算，已結算的不受影響
+    set_budgets(client, 1, 1)
+    s = client.get(f"{base}/settlement").json()
+    assert [(l["name"], l["budget"], l["spent"]) for l in s["lines"]] == [("成", 10000, 4000), ("圓", 8000, 0)]
+
+    # 結算後記錄鎖住
+    assert add(client, led).status_code == 409
+    body = {"amount": 1, "date": "2026-11-01"} | pick(led)
+    assert patch(client, f"{base}/transactions/{t['id']}", body).status_code == 409
+    assert delete(client, f"{base}/transactions/{t['id']}").status_code == 409
+
+    # 取消結算：解鎖，回到用現在的預算試算
+    r = delete(client, f"{base}/settlement")
+    assert r.status_code == 200 and r.json()["settled"] is False
+    assert [l["budget"] for l in r.json()["lines"]] == [1, 1]
+    assert add(client, led).status_code == 201
+    assert delete(client, f"{base}/settlement").status_code == 404
+
+
+def test_settlement_is_per_ledger(client):
+    login(client)
+    a, b = new_ledger(client, "10 月"), new_ledger(client, "11 月")
+    add(client, a, party="成", amount=100)
+    post(client, f"/api/ledgers/{a['id']}/settlement", {})
+    assert add(client, b, party="成", amount=200).status_code == 201
+    assert client.get(f"/api/ledgers/{b['id']}/settlement").json()["lines"][0]["spent"] == 200
+
+
 # ---------- 遷移 ----------
 def test_migrate_v0_keeps_records(tmp_path):
     from app import db
@@ -339,6 +418,20 @@ def test_migrate_v0_without_records(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM ledgers").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM categories").fetchone()[0] == 0
     assert "ledger_id" in db.columns(conn, "categories")
+
+
+def test_migrate_v1_adds_budgets(tmp_path):
+    from app import db
+    conn = db.connect(tmp_path / "v1.db")
+    conn.executescript(db.SCHEMA.split("CREATE TABLE IF NOT EXISTS budgets")[0])
+    conn.execute("PRAGMA user_version = 1")
+    conn.execute("INSERT INTO users (username, display_name, pass_hash) VALUES ('z', 'Z', 'h')")
+    db.create_ledger(conn, "11 月", ["成"], 1)
+    conn.commit()
+    db.init(conn)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert {r[0] for r in conn.execute("SELECT name FROM budgets")} == {"成", "圓"}
+    assert conn.execute("SELECT COUNT(*) FROM ledgers").fetchone()[0] == 1
 
 
 def test_password_hash_roundtrip():
