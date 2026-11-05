@@ -364,6 +364,23 @@ def test_settle_snapshot_and_lock(client):
     assert delete(client, f"{base}/settlement").status_code == 404
 
 
+def test_settlement_follows_ledger_party_order(client):
+    login(client)
+    led = new_ledger(client, parties=["寶貝基金", "成", "圓"])
+    url = f"/api/ledgers/{led['id']}/settlement"
+    assert [l["name"] for l in client.get(url).json()["lines"]] == ["寶貝基金", "成", "圓"]
+    # 在帳本設定把圓移到最前面，結算也跟著變
+    ids = {p["name"]: p["id"] for p in led["parties"]}
+    for n, name in enumerate(["圓", "寶貝基金", "成"]):
+        patch(client, f"/api/ledgers/{led['id']}/parties/{ids[name]}", {"sort_order": n})
+    assert [l["name"] for l in client.get(url).json()["lines"]] == ["圓", "寶貝基金", "成"]
+    post(client, url, {})  # 已結算的也照帳本順序
+    assert [l["name"] for l in client.get(url).json()["lines"]] == ["圓", "寶貝基金", "成"]
+    # 帳本裡沒有的人排最後
+    other = new_ledger(client, "B", parties=["圓", "阿嬤"])
+    assert [l["name"] for l in client.get(f"/api/ledgers/{other['id']}/settlement").json()["lines"]] == ["圓", "成", "寶貝基金"]
+
+
 def test_settlement_is_per_ledger(client):
     login(client)
     a, b = new_ledger(client, "10 月"), new_ledger(client, "11 月")

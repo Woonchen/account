@@ -546,6 +546,14 @@ def settlement_result(lines, settled=None):
             "lines": out, "total": total}
 
 
+def party_order(conn, lid):
+    """排序跟記帳頁一樣：照這本帳本付款／收款人的順序；帳本裡沒有的人排最後。"""
+    ranks = {r["name"]: i for i, r in enumerate(
+        conn.execute("SELECT name FROM parties WHERE ledger_id = ? ORDER BY sort_order, id", (lid,)))}
+    fallback = {n: i for i, n in enumerate(db.BUDGET_NAMES)}
+    return lambda line: (ranks.get(line["name"], len(ranks)), fallback.get(line["name"], 99))
+
+
 @app.get("/api/ledgers/{lid}/settlement")
 def get_settlement(lid: int = Depends(get_ledger), user=Depends(current_user), conn=Depends(get_conn)):
     """已結算就回傳當時存下的結果；還沒結算就用現在的全域預算試算。"""
@@ -553,11 +561,10 @@ def get_settlement(lid: int = Depends(get_ledger), user=Depends(current_user), c
                               WHERE s.ledger_id = ?""", (lid,)).fetchone()
     if settled:
         lines = conn.execute("SELECT name, budget, spent FROM settlement_lines WHERE ledger_id = ?", (lid,)).fetchall()
-        order = {n: i for i, n in enumerate(db.BUDGET_NAMES)}
-        return settlement_result(sorted(lines, key=lambda l: order.get(l["name"], 99)), settled)
-    spent = spent_by_name(conn, lid)
-    return settlement_result([{"name": b["name"], "budget": b["amount"], "spent": spent.get(b["name"], 0)}
-                              for b in current_budgets(conn)])
+    else:
+        spent = spent_by_name(conn, lid)
+        lines = [{"name": b["name"], "budget": b["amount"], "spent": spent.get(b["name"], 0)} for b in current_budgets(conn)]
+    return settlement_result(sorted(lines, key=party_order(conn, lid)), settled)
 
 
 @app.post("/api/ledgers/{lid}/settlement", status_code=201)
