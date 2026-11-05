@@ -189,8 +189,19 @@ $("#cat-period-kind").addEventListener("click", (e) => {
   renderCatBars();
 });
 
-async function loadDashboard() {
-  const d = await api(L("/dashboard"));
+// 快速切換帳本／頁面時會同時有好幾個請求，只畫最後發出的那個，舊帳本的回應晚到也不會蓋掉畫面
+let loadToken = 0;
+async function latest(path) {
+  const token = ++loadToken;
+  const data = await api(L(path));
+  if (token !== loadToken) throw new Error("stale");
+  return data;
+}
+const ignoreStale = (err) => { if (err.message !== "stale") throw err; };
+
+async function loadDashboard() { return drawDashboard().catch(ignoreStale); }
+async function drawDashboard() {
+  const d = await latest("/dashboard");
   state.dash = d;
   const t = d.totals;
   $("#t-income").textContent = fmt.format(t.income);
@@ -259,10 +270,11 @@ function renderPartyFilter() {
   box.append(chip(null, "全部"), ...parties.map((p) => chip(p.id, p.name)));
 }
 
-async function loadRecords() {
+async function loadRecords() { return drawRecords().catch(ignoreStale); }
+async function drawRecords() {
   const q = new URLSearchParams();
   if (state.partyFilter) q.set("party_id", state.partyFilter);
-  const data = await api(L(`/transactions?${q}`));
+  const data = await latest(`/transactions?${q}`);
   const s = data.summary;
   $("#m-income").textContent = fmt.format(s.income);
   $("#m-expense").textContent = fmt.format(s.expense);
@@ -487,7 +499,10 @@ function manageRow(item, i, list, { path, icon }) {
   };
   name.addEventListener("change", save);
   iconIn?.addEventListener("change", save);
-  const up = el("button", { type: "button", textContent: "↑", disabled: i === 0, ariaLabel: "往上" });
+  // 成、圓、寶貝基金的順序由全域設定決定，永遠排在前面：它們、以及緊接在它們後面的第一位都不能往上
+  const fixed = item.global_order || (i > 0 && list[i - 1].global_order);
+  const up = el("button", { type: "button", textContent: "↑", disabled: i === 0 || fixed, ariaLabel: "往上",
+                            title: item.global_order ? "順序在全域設定調整" : "" });
   up.addEventListener("click", () => settingsCall(() => {
     // 整組重新編號再交換，sort_order 有重複時順序才不會亂
     const order = list.map((x) => x.id);
@@ -567,8 +582,9 @@ function localTime(utc) {  // SQLite datetime('now') 是 UTC 的「YYYY-MM-DD HH
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-async function loadSettlement() {
-  const s = await api(L("/settlement"));
+async function loadSettlement() { return drawSettlement().catch(ignoreStale); }
+async function drawSettlement() {
+  const s = await latest("/settlement");
   const status = $("#settle-status");
   status.textContent = s.settled ? "已結算" : "試算中";
   status.className = s.settled ? "status done" : "status";
@@ -637,9 +653,17 @@ async function openGlobal() {
   closePopovers();
   $("#global-error").textContent = "";
   const budgets = await api("/api/budgets");
-  $("#budget-inputs").replaceChildren(...budgets.map((b) =>
-    el("label", {}, el("span", { textContent: b.name }),
-      el("input", { name: b.name, inputMode: "numeric", value: b.amount ? b.amount : "", placeholder: "0", autocomplete: "off", ariaLabel: `${b.name}的預算` }))));
+  const box = $("#budget-inputs");
+  const refreshUp = () => [...box.children].forEach((row, i) => { row.querySelector("button").disabled = i === 0; });
+  box.replaceChildren(...budgets.map((b) => {
+    const up = el("button", { type: "button", textContent: "↑", ariaLabel: `${b.name}往上` });
+    const row = el("div", { className: "budget-row" }, el("span", { textContent: b.name }),
+      el("input", { name: b.name, inputMode: "numeric", value: b.amount ? b.amount : "", placeholder: "0", autocomplete: "off", ariaLabel: `${b.name}的預算` }),
+      up);
+    up.addEventListener("click", () => { if (row.previousElementSibling) box.insertBefore(row, row.previousElementSibling); refreshUp(); });
+    return row;
+  }));
+  refreshUp();
   globalDialog.showModal();
 }
 $("#global-settings").addEventListener("click", openGlobal);
@@ -658,7 +682,7 @@ $("#global-form").addEventListener("submit", async (e) => {
   try {
     await api("/api/budgets", { method: "PUT", body: { items } });
     globalDialog.close();
-    if (state.ledger && state.view === "settle") loadSettlement();
+    if (state.ledger) { await reloadLedger(); showView(); }  // 排序變了，目前畫面重排
   } catch (err) {
     $("#global-error").textContent = err.message;
   }

@@ -211,7 +211,8 @@ label input { margin-top: 4px; font-size: 16px; color: var(--text); }
 .settle-explain { margin: 12px 4px; }
 .settle-actions { margin-top: 4px; }
 .budget-inputs { display: grid; gap: 10px; }
-.budget-inputs label { display: grid; grid-template-columns: 5em 1fr; align-items: center; gap: 8px; margin: 0; color: var(--text); font-size: 16px; }
+.budget-row { display: grid; grid-template-columns: 5em 1fr auto; align-items: center; gap: 8px; font-size: 16px; }
+.budget-row button { padding: 8px 12px; }
 .budget-inputs input { margin: 0; font-variant-numeric: tabular-nums; }
 .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; margin-left: 6px; }
 

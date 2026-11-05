@@ -192,8 +192,9 @@
     <h3>全域設定</h3>
     <p class="muted small">這裡的設定套用到所有帳本。每本帳本結算時，會拿成、圓、寶貝基金在那本帳本的支出減去這裡的預算。</p>
     <div class="field">
-      <span class="field-label">每本帳本的預算</span>
+      <span class="field-label">排列順序與每本帳本的預算</span>
       <div id="budget-inputs" class="budget-inputs"></div>
+      <p class="muted small">用 ↑ 調整順序，所有帳本的記帳、儀表板、結算都會照這個順序排。</p>
     </div>
     <p class="muted small">已經完成結算的帳本會保留當時的預算，改這裡不會影響它們。</p>
     <p class="error" id="global-error"></p>
@@ -269,6 +270,7 @@
     <section class="field">
       <span class="field-label">付款／收款人</span>
       <ul class="manage" id="set-parties"></ul>
+      <p class="muted small" id="set-parties-hint">成、圓、寶貝基金的順序在「全域設定」調整，所有帳本一起套用；其他人排在後面，可以在這裡調整。</p>
       <form class="manage-add" id="party-add-form">
         <input name="name" maxlength="20" placeholder="新增一位" required aria-label="名稱">
         <button class="primary" type="submit">新增</button>

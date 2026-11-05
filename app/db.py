@@ -8,7 +8,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-VERSION = 2
+VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -60,6 +60,7 @@ CREATE INDEX IF NOT EXISTS idx_tx_ledger_date ON transactions(ledger_id, date);
 CREATE TABLE IF NOT EXISTS budgets (
     name TEXT PRIMARY KEY,
     amount INTEGER NOT NULL DEFAULT 0 CHECK (amount >= 0),
+    sort_order INTEGER NOT NULL DEFAULT 0,  -- 全域排列順序：所有帳本裡這幾位都照這個順序
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS settlements (
@@ -78,6 +79,8 @@ CREATE TABLE IF NOT EXISTS settlement_lines (
 
 DEFAULT_PARTIES = ["成", "圓", "寶貝基金"]
 BUDGET_NAMES = ["成", "圓", "寶貝基金"]  # 全域預算固定這三位；帳本裡同名的付款人套用
+# 付款／收款人的排序（SQL，表別名要是 p）：全域設定的這三位照全域順序排最前面，其他人照帳本自己的順序
+PARTY_ORDER = "COALESCE((SELECT b.sort_order FROM budgets b WHERE b.name = p.name), 1000), p.sort_order, p.id"
 DEFAULT_CATEGORIES = [
     ("expense", "餐飲", "🍜"), ("expense", "交通", "🚌"), ("expense", "購物", "🛍️"),
     ("expense", "居家", "🏠"), ("expense", "娛樂", "🎬"), ("expense", "醫療", "💊"),
@@ -117,8 +120,12 @@ def init(conn):
     cols = columns(conn, "categories")
     if cols and "ledger_id" not in cols:
         migrate_v0(conn)
+    if columns(conn, "budgets") and "sort_order" not in columns(conn, "budgets"):  # v2 → v3
+        conn.execute("ALTER TABLE budgets ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+        conn.executemany("UPDATE budgets SET sort_order = ? WHERE name = ?", [(i, n) for i, n in enumerate(BUDGET_NAMES)])
     create_schema(conn)
-    conn.executemany("INSERT OR IGNORE INTO budgets (name) VALUES (?)", [(n,) for n in BUDGET_NAMES])
+    conn.executemany("INSERT OR IGNORE INTO budgets (name, sort_order) VALUES (?, ?)",
+                     [(n, i) for i, n in enumerate(BUDGET_NAMES)])
     conn.execute(f"PRAGMA user_version = {VERSION}")
     conn.commit()
 

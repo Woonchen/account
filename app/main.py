@@ -207,7 +207,8 @@ def create_ledger(body: LedgerIn, user=Depends(current_user), conn=Depends(get_c
 def ledger_detail(lid: int = Depends(get_ledger), user=Depends(current_user), conn=Depends(get_conn)):
     """帳本＋成員＋分類，前端切換帳本時一次拿齊。"""
     led = ledger_row(conn, lid)
-    parties = conn.execute("SELECT * FROM parties WHERE ledger_id = ? ORDER BY sort_order, id", (lid,)).fetchall()
+    parties = conn.execute(f"""SELECT p.*, EXISTS (SELECT 1 FROM budgets b WHERE b.name = p.name) AS global_order
+                               FROM parties p WHERE p.ledger_id = ? ORDER BY {db.PARTY_ORDER}""", (lid,)).fetchall()
     cats = conn.execute("SELECT * FROM categories WHERE ledger_id = ? ORDER BY kind DESC, sort_order, id", (lid,)).fetchall()
     return ledger_dict(led) | {"parties": [party_dict(p) for p in parties], "categories": [category_dict(c) for c in cats]}
 
@@ -243,7 +244,10 @@ class PartyPatch(BaseModel):
 
 
 def party_dict(r):
-    return {"id": r["id"], "name": r["name"], "sort_order": r["sort_order"], "archived": bool(r["archived"])}
+    d = {"id": r["id"], "name": r["name"], "sort_order": r["sort_order"], "archived": bool(r["archived"])}
+    if "global_order" in r.keys():  # 順序由全域設定決定（成、圓、寶貝基金），帳本設定裡不能調
+        d["global_order"] = bool(r["global_order"])
+    return d
 
 
 def get_party(conn, lid, pid):
@@ -470,7 +474,7 @@ def dashboard(start: str | None = None, end: str | None = None,
                COALESCE(SUM(CASE WHEN t.kind = 'income' THEN t.amount END), 0) AS income,
                COALESCE(SUM(CASE WHEN t.kind = 'expense' THEN t.amount END), 0) AS expense
         FROM parties p LEFT JOIN transactions t ON t.party_id = p.id AND {where}
-        WHERE p.ledger_id = ? GROUP BY p.id ORDER BY p.sort_order, p.id""", (*params, lid)).fetchall()
+        WHERE p.ledger_id = ? GROUP BY p.id ORDER BY {db.PARTY_ORDER}""", (*params, lid)).fetchall()
     # 舊版搬過來、沒有成員的記錄
     no_party = conn.execute(f"""
         SELECT COALESCE(SUM(CASE WHEN kind = 'income' THEN amount END), 0) AS income,
@@ -505,8 +509,10 @@ class BudgetsIn(BaseModel):
 
 
 def current_budgets(conn):
-    rows = {r["name"]: r for r in conn.execute("SELECT * FROM budgets")}
-    return [{"name": n, "amount": rows[n]["amount"], "updated_at": rows[n]["updated_at"]} for n in db.BUDGET_NAMES]
+    """照全域排列順序。"""
+    marks = ",".join("?" * len(db.BUDGET_NAMES))
+    rows = conn.execute(f"SELECT * FROM budgets WHERE name IN ({marks}) ORDER BY sort_order, name", db.BUDGET_NAMES)
+    return [{"name": r["name"], "amount": r["amount"], "updated_at": r["updated_at"]} for r in rows]
 
 
 @app.get("/api/budgets")
@@ -516,11 +522,12 @@ def get_budgets(user=Depends(current_user), conn=Depends(get_conn)):
 
 @app.put("/api/budgets")
 def put_budgets(body: BudgetsIn, user=Depends(current_user), conn=Depends(get_conn)):
-    for item in body.items:
-        if item.name not in db.BUDGET_NAMES:
-            raise HTTPException(422, f"只能設定{'、'.join(db.BUDGET_NAMES)}的預算")
-    conn.executemany("UPDATE budgets SET amount = ?, updated_at = datetime('now') WHERE name = ?",
-                     [(i.amount, i.name) for i in body.items])
+    """items 的先後就是全域排列順序，三位都要給。"""
+    names = [i.name for i in body.items]
+    if sorted(names) != sorted(db.BUDGET_NAMES):
+        raise HTTPException(422, f"要剛好包含{'、'.join(db.BUDGET_NAMES)}各一次")
+    conn.executemany("UPDATE budgets SET amount = ?, sort_order = ?, updated_at = datetime('now') WHERE name = ?",
+                     [(i.amount, n, i.name) for n, i in enumerate(body.items)])
     conn.commit()
     log(f"更新預算 {', '.join(f'{i.name}={i.amount}' for i in body.items)}（{user['username']}）")
     return current_budgets(conn)
@@ -547,10 +554,10 @@ def settlement_result(lines, settled=None):
 
 
 def party_order(conn, lid):
-    """排序跟記帳頁一樣：照這本帳本付款／收款人的順序；帳本裡沒有的人排最後。"""
+    """排序跟記帳頁一樣：照這本帳本付款／收款人的順序（成、圓、寶貝基金照全域順序）；帳本裡沒有的人排最後。"""
     ranks = {r["name"]: i for i, r in enumerate(
-        conn.execute("SELECT name FROM parties WHERE ledger_id = ? ORDER BY sort_order, id", (lid,)))}
-    fallback = {n: i for i, n in enumerate(db.BUDGET_NAMES)}
+        conn.execute(f"SELECT p.name FROM parties p WHERE p.ledger_id = ? ORDER BY {db.PARTY_ORDER}", (lid,)))}
+    fallback = {b["name"]: i for i, b in enumerate(current_budgets(conn))}
     return lambda line: (ranks.get(line["name"], len(ranks)), fallback.get(line["name"], 99))
 
 

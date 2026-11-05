@@ -364,21 +364,40 @@ def test_settle_snapshot_and_lock(client):
     assert delete(client, f"{base}/settlement").status_code == 404
 
 
-def test_settlement_follows_ledger_party_order(client):
+def put_order(c, names, amounts=None):
+    amounts = amounts or {}
+    return c.put("/api/budgets", json={"items": [{"name": n, "amount": amounts.get(n, 0)} for n in names]}, headers=ORIGIN)
+
+
+def test_global_party_order_applies_everywhere(client):
     login(client)
-    led = new_ledger(client, parties=["寶貝基金", "成", "圓"])
-    url = f"/api/ledgers/{led['id']}/settlement"
-    assert [l["name"] for l in client.get(url).json()["lines"]] == ["寶貝基金", "成", "圓"]
-    # 在帳本設定把圓移到最前面，結算也跟著變
-    ids = {p["name"]: p["id"] for p in led["parties"]}
-    for n, name in enumerate(["圓", "寶貝基金", "成"]):
-        patch(client, f"/api/ledgers/{led['id']}/parties/{ids[name]}", {"sort_order": n})
-    assert [l["name"] for l in client.get(url).json()["lines"]] == ["圓", "寶貝基金", "成"]
-    post(client, url, {})  # 已結算的也照帳本順序
-    assert [l["name"] for l in client.get(url).json()["lines"]] == ["圓", "寶貝基金", "成"]
-    # 帳本裡沒有的人排最後
-    other = new_ledger(client, "B", parties=["圓", "阿嬤"])
-    assert [l["name"] for l in client.get(f"/api/ledgers/{other['id']}/settlement").json()["lines"]] == ["圓", "成", "寶貝基金"]
+    led = new_ledger(client, parties=["寶貝基金", "阿嬤", "成", "圓"])
+    lid = led["id"]
+    names = lambda: [p["name"] for p in client.get(f"/api/ledgers/{lid}").json()["parties"]]
+    # 預設全域順序 成、圓、寶貝基金，其他人排後面
+    assert [p["name"] for p in led["parties"]] == ["成", "圓", "寶貝基金", "阿嬤"]
+    assert [p["global_order"] for p in led["parties"]] == [True, True, True, False]
+
+    r = put_order(client, ["圓", "寶貝基金", "成"], {"成": 100})
+    assert [b["name"] for b in r.json()] == ["圓", "寶貝基金", "成"]
+    assert [b["name"] for b in client.get("/api/budgets").json()] == ["圓", "寶貝基金", "成"]
+    assert names() == ["圓", "寶貝基金", "成", "阿嬤"]
+    assert [p["name"] for p in client.get(f"/api/ledgers/{lid}/dashboard").json()["by_party"]] == ["圓", "寶貝基金", "成", "阿嬤"]
+    assert [l["name"] for l in client.get(f"/api/ledgers/{lid}/settlement").json()["lines"]] == ["圓", "寶貝基金", "成"]
+    post(client, f"/api/ledgers/{lid}/settlement", {})  # 已結算的也照全域順序
+    assert [l["name"] for l in client.get(f"/api/ledgers/{lid}/settlement").json()["lines"]] == ["圓", "寶貝基金", "成"]
+    # 其他帳本也一樣
+    other = new_ledger(client, "B")
+    assert [p["name"] for p in other["parties"]] == ["圓", "寶貝基金", "成"]
+    # 三位要剛好各一次
+    assert put_order(client, ["成", "圓"]).status_code == 422
+    assert put_order(client, ["成", "成", "圓"]).status_code == 422
+
+
+def test_settlement_missing_party_sorted_last(client):
+    login(client)
+    led = new_ledger(client, parties=["圓", "阿嬤"])
+    assert [l["name"] for l in client.get(f"/api/ledgers/{led['id']}/settlement").json()["lines"]] == ["圓", "成", "寶貝基金"]
 
 
 def test_settlement_is_per_ledger(client):
@@ -450,7 +469,7 @@ def test_migrate_v1_adds_budgets(tmp_path):
     db.create_ledger(conn, "11 月", ["成"], 1)
     conn.commit()
     db.init(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
     assert {r[0] for r in conn.execute("SELECT name FROM budgets")} == {"成", "圓", "寶貝基金"}
     assert conn.execute("SELECT COUNT(*) FROM ledgers").fetchone()[0] == 1
 
@@ -464,6 +483,22 @@ def test_existing_v2_gets_fund_budget(tmp_path):
     conn.commit()
     db.init(conn)
     assert dict(conn.execute("SELECT name, amount FROM budgets").fetchall()) == {"成": 123, "圓": 0, "寶貝基金": 0}
+
+
+def test_migrate_v2_adds_budget_order(tmp_path):
+    from app import db
+    conn = db.connect(tmp_path / "v2.db")
+    v2 = db.SCHEMA.replace("    sort_order INTEGER NOT NULL DEFAULT 0,  -- 全域排列順序：所有帳本裡這幾位都照這個順序\n", "")
+    assert v2 != db.SCHEMA
+    for stmt in v2.split(";"):
+        if stmt.strip():
+            conn.execute(stmt)
+    conn.executemany("INSERT INTO budgets (name, amount) VALUES (?, ?)", [("寶貝基金", 9), ("圓", 8), ("成", 7)])
+    conn.execute("PRAGMA user_version = 2")
+    conn.commit()
+    db.init(conn)
+    rows = conn.execute("SELECT name, amount FROM budgets ORDER BY sort_order").fetchall()
+    assert [tuple(r) for r in rows] == [("成", 7), ("圓", 8), ("寶貝基金", 9)]  # 金額保留、順序是預設的成、圓、寶貝基金
 
 
 def test_password_hash_roundtrip():
