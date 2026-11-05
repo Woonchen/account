@@ -631,7 +631,7 @@ $("#settle-undo").addEventListener("click", async () => {
   await afterSettleChange();
 });
 
-// ---------- 全域設定（成、圓的預算） ----------
+// ---------- 全域設定（成、圓、寶貝基金的預算） ----------
 const globalDialog = $("#global-dialog");
 async function openGlobal() {
   closePopovers();

@@ -291,34 +291,38 @@ def test_dashboard(client):
 
 
 # ---------- 全域預算與結算 ----------
-def set_budgets(c, cheng, yuan):
-    return c.put("/api/budgets", json={"items": [{"name": "成", "amount": cheng}, {"name": "圓", "amount": yuan}]}, headers=ORIGIN)
+def set_budgets(c, cheng, yuan, fund=0):
+    items = [{"name": "成", "amount": cheng}, {"name": "圓", "amount": yuan}, {"name": "寶貝基金", "amount": fund}]
+    return c.put("/api/budgets", json={"items": items}, headers=ORIGIN)
 
 
 def test_budgets(client):
     login(client)
-    assert [(b["name"], b["amount"]) for b in client.get("/api/budgets").json()] == [("成", 0), ("圓", 0)]
-    r = set_budgets(client, 20000, 15000)
-    assert [(b["name"], b["amount"]) for b in r.json()] == [("成", 20000), ("圓", 15000)]
-    assert client.put("/api/budgets", json={"items": [{"name": "寶貝基金", "amount": 1}]}, headers=ORIGIN).status_code == 422
+    assert [(b["name"], b["amount"]) for b in client.get("/api/budgets").json()] == [("成", 0), ("圓", 0), ("寶貝基金", 0)]
+    r = set_budgets(client, 20000, 15000, 5000)
+    assert [(b["name"], b["amount"]) for b in r.json()] == [("成", 20000), ("圓", 15000), ("寶貝基金", 5000)]
+    assert client.put("/api/budgets", json={"items": [{"name": "阿嬤", "amount": 1}]}, headers=ORIGIN).status_code == 422
     assert set_budgets(client, -1, 0).status_code == 422
     client.post("/api/logout", headers=ORIGIN)
     assert client.get("/api/budgets").status_code == 401
 
 
-def test_settlement_preview_counts_only_expenses_of_cheng_and_yuan(client):
+def test_settlement_preview_counts_only_expenses(client):
     login(client)
-    set_budgets(client, 10000, 8000)
+    set_budgets(client, 10000, 8000, 5000)
     led = new_ledger(client)
     add(client, led, party="成", amount=3000)
     add(client, led, "交通", "成", amount=500)
     add(client, led, party="圓", amount=9000)
-    add(client, led, party="寶貝基金", amount=7777)               # 不是成、圓，不算
+    add(client, led, party="寶貝基金", amount=7777)
     add(client, led, "薪資", "成", "income", amount=50000)       # 收款不算
+    add(client, led, "投資", "寶貝基金", "income", amount=3000)  # 收款不算
+    post(client, f"/api/ledgers/{led['id']}/parties", {"name": "阿嬤"})
     s = client.get(f"/api/ledgers/{led['id']}/settlement").json()
     assert s["settled"] is False
-    assert [(l["name"], l["budget"], l["spent"], l["diff"]) for l in s["lines"]] == [("成", 10000, 3500, -6500), ("圓", 8000, 9000, 1000)]
-    assert s["total"] == {"budget": 18000, "spent": 12500, "diff": -5500}
+    assert [(l["name"], l["budget"], l["spent"], l["diff"]) for l in s["lines"]] == [
+        ("成", 10000, 3500, -6500), ("圓", 8000, 9000, 1000), ("寶貝基金", 5000, 7777, 2777)]
+    assert s["total"] == {"budget": 23000, "spent": 20277, "diff": -2723}
 
 
 def test_settlement_without_party_named_cheng(client):
@@ -326,7 +330,7 @@ def test_settlement_without_party_named_cheng(client):
     set_budgets(client, 100, 100)
     led = new_ledger(client, parties=["阿明"])
     s = client.get(f"/api/ledgers/{led['id']}/settlement").json()
-    assert [l["spent"] for l in s["lines"]] == [0, 0]
+    assert [l["spent"] for l in s["lines"]] == [0, 0, 0]
 
 
 def test_settle_snapshot_and_lock(client):
@@ -344,7 +348,7 @@ def test_settle_snapshot_and_lock(client):
     # 之後改全域預算，已結算的不受影響
     set_budgets(client, 1, 1)
     s = client.get(f"{base}/settlement").json()
-    assert [(l["name"], l["budget"], l["spent"]) for l in s["lines"]] == [("成", 10000, 4000), ("圓", 8000, 0)]
+    assert [(l["name"], l["budget"], l["spent"]) for l in s["lines"]] == [("成", 10000, 4000), ("圓", 8000, 0), ("寶貝基金", 0, 0)]
 
     # 結算後記錄鎖住
     assert add(client, led).status_code == 409
@@ -355,7 +359,7 @@ def test_settle_snapshot_and_lock(client):
     # 取消結算：解鎖，回到用現在的預算試算
     r = delete(client, f"{base}/settlement")
     assert r.status_code == 200 and r.json()["settled"] is False
-    assert [l["budget"] for l in r.json()["lines"]] == [1, 1]
+    assert [l["budget"] for l in r.json()["lines"]] == [1, 1, 0]
     assert add(client, led).status_code == 201
     assert delete(client, f"{base}/settlement").status_code == 404
 
@@ -430,8 +434,19 @@ def test_migrate_v1_adds_budgets(tmp_path):
     conn.commit()
     db.init(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
-    assert {r[0] for r in conn.execute("SELECT name FROM budgets")} == {"成", "圓"}
+    assert {r[0] for r in conn.execute("SELECT name FROM budgets")} == {"成", "圓", "寶貝基金"}
     assert conn.execute("SELECT COUNT(*) FROM ledgers").fetchone()[0] == 1
+
+
+def test_existing_v2_gets_fund_budget(tmp_path):
+    from app import db
+    conn = db.connect(tmp_path / "v2.db")
+    db.init(conn)
+    conn.execute("DELETE FROM budgets WHERE name = '寶貝基金'")
+    conn.execute("UPDATE budgets SET amount = 123 WHERE name = '成'")
+    conn.commit()
+    db.init(conn)
+    assert dict(conn.execute("SELECT name, amount FROM budgets").fetchall()) == {"成": 123, "圓": 0, "寶貝基金": 0}
 
 
 def test_password_hash_roundtrip():

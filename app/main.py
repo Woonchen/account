@@ -528,7 +528,7 @@ def put_budgets(body: BudgetsIn, user=Depends(current_user), conn=Depends(get_co
 
 # ---------- 結算 ----------
 def spent_by_name(conn, lid):
-    """這本帳本裡，名字是成、圓的付款人各自付的支出合計（收款不算）。"""
+    """這本帳本裡，名字是成、圓、寶貝基金的付款人各自付的支出合計（收款不算）。"""
     marks = ",".join("?" * len(db.BUDGET_NAMES))
     rows = conn.execute(f"""SELECT p.name, SUM(t.amount) AS spent FROM transactions t JOIN parties p ON p.id = t.party_id
                             WHERE t.ledger_id = ? AND t.kind = 'expense' AND p.name IN ({marks})

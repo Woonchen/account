@@ -1,7 +1,7 @@
 """SQLite：連線、建表、遷移、新帳本的預設內容。資料檔位置由 ACCOUNT_DB 決定（預設 data/account.db）。
 
 結構：帳本 ledgers → 每本帳本各自的成員 parties（誰付款／收款）與分類 categories → 收支記錄 transactions。
-帳本之上有全域預算 budgets（固定 成、圓）；帳本「完成結算」時把當時的預算與花費存進 settlements／settlement_lines。
+帳本之上有全域預算 budgets（固定 成、圓、寶貝基金）；帳本「完成結算」時把當時的預算與花費存進 settlements／settlement_lines。
 所有登入的帳號共用全部帳本。schema 版本記在 PRAGMA user_version。
 """
 import os
@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS settlement_lines (
 """
 
 DEFAULT_PARTIES = ["成", "圓", "寶貝基金"]
-BUDGET_NAMES = ["成", "圓"]  # 全域預算固定這兩位；帳本裡同名的付款人套用
+BUDGET_NAMES = ["成", "圓", "寶貝基金"]  # 全域預算固定這三位；帳本裡同名的付款人套用
 DEFAULT_CATEGORIES = [
     ("expense", "餐飲", "🍜"), ("expense", "交通", "🚌"), ("expense", "購物", "🛍️"),
     ("expense", "居家", "🏠"), ("expense", "娛樂", "🎬"), ("expense", "醫療", "💊"),
